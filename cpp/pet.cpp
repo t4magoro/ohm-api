@@ -24,15 +24,18 @@ double empty_at(double v, double at, double rate) {
   return rate > 0 ? at + v / rate * HOUR : __builtin_inf();
 }
 
-// Drain rates in points per hour. At night Ohm sleeps, so everything drains at half speed.
+// Drain rates in points per hour. `hours` is how long a full bar lasts on a normal day
+// (you set it on the admin page). At night Ohm sleeps, so everything drains at half speed.
 EXPORT("charge_rate")
-double charge_rate(double temp_c, int is_day) {
-  return 5.0 * (is_day ? 1.0 : 0.5) * (temp_c > 30 ? 1.5 : 1.0);  // 100 -> 0 in 20 h
+double charge_rate(double hours, double temp_c, int is_day) {
+  if (hours <= 0) return 0;  // the server only allows 1-168; this is a last safety net
+  return 100.0 / hours * (is_day ? 1.0 : 0.5) * (temp_c > 30 ? 1.5 : 1.0);
 }
 
 EXPORT("mood_rate")
-double mood_rate(int raining, int is_day) {
-  return 8.0 * (is_day ? 1.0 : 0.5) * (raining ? 1.3 : 1.0);  // 100 -> 0 in ~12 h
+double mood_rate(double hours, int raining, int is_day) {
+  if (hours <= 0) return 0;
+  return 100.0 / hours * (is_day ? 1.0 : 0.5) * (raining ? 1.3 : 1.0);
 }
 
 // Ohm's brain grows with its vocabulary. 1: random known words, 2: each word follows

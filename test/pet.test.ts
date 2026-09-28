@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { act, applyWeather, catchUp, newPet,isSulking } from "../src/pet";
+import { act, applyConditions, catchUp, isSulking, newPet } from "../src/pet";
+import { DEFAULT_SETTINGS } from "../src/protocol";
 
 // In the Worker, wrangler loads pet.wasm. In tests, Node loads the same compiled C++.
 // Run `npm run build:wasm` first (`npm test` does it for you).
@@ -12,8 +13,8 @@ vi.mock("../src/wasm", async () => {
 
 const HOUR = 3_600_000;
 const T0 = Date.UTC(2026, 9, 1); // any fixed start time
-const DAY = { tempC: 27, raining: false, isDay: true };
-const NIGHT = { tempC: 22, raining: false, isDay: false };
+const DAY = { weather: { tempC: 27, raining: false, isDay: true }, settings: DEFAULT_SETTINGS };
+const NIGHT = { weather: { tempC: 22, raining: false, isDay: false }, settings: DEFAULT_SETTINGS };
 
 describe("pet rules", () => {
   it("starts full and on", () => {
@@ -51,29 +52,36 @@ describe("pet rules", () => {
   });
 });
 
-describe("weather", () => {
+describe("conditions", () => {
   it("night halves the drain without making the bars jump", () => {
     const pet = newPet(T0, DAY);
-    applyWeather(pet, NIGHT, T0 + 4 * HOUR); // charge is 80 at this moment
+    applyConditions(pet, NIGHT, T0 + 4 * HOUR); // charge is 80 at this moment
     expect(pet.charge).toEqual({ v: 80, at: T0 + 4 * HOUR, rate: 2.5 });
     expect(pet.mood.rate).toBe(4);
   });
 
   it("heat drains the battery faster and rain drains the mood faster", () => {
     const pet = newPet(T0, DAY);
-    applyWeather(pet, { tempC: 33, raining: true, isDay: true }, T0);
+    applyConditions(pet, { ...DAY, weather: { tempC: 33, raining: true, isDay: true } }, T0);
     expect(pet.charge.rate).toBe(7.5);
     expect(pet.mood.rate).toBe(10.4);
+  });
+
+  it("your battery settings change the speed, also for a living Ohm", () => {
+    const pet = newPet(T0, DAY);
+    applyConditions(pet, { ...DAY, settings: { chargeHours: 40, moodHours: 25 } }, T0 + 4 * HOUR);
+    expect(pet.charge).toEqual({ v: 80, at: T0 + 4 * HOUR, rate: 2.5 }); // 100 / 40 h
+    expect(pet.mood.rate).toBe(4); // 100 / 25 h
   });
 
   it("an Ohm that's off ignores the weather", () => {
     const pet = newPet(T0, DAY);
     catchUp(pet, T0 + 30 * HOUR);
-    applyWeather(pet, NIGHT, T0 + 30 * HOUR);
+    applyConditions(pet, NIGHT, T0 + 30 * HOUR);
     expect(pet.charge.rate).toBe(0);
   });
 
-  it("a reboot uses the current weather's speed", () => {
+  it("a reboot uses the current speed", () => {
     const pet = newPet(T0, DAY);
     catchUp(pet, T0 + 30 * HOUR);
     act(pet, "reboot", T0 + 30 * HOUR, NIGHT);

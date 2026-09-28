@@ -12,12 +12,14 @@ int main() {
   assert(empty_at(100, 0, 5) == 20 * H);
   assert(std::isinf(empty_at(100, 0, 0)));       // not draining
 
-  assert(charge_rate(27, 1) == 5);
-  assert(charge_rate(30, 1) == 5);               // exactly 30 °C is not hot
-  assert(charge_rate(31, 1) == 7.5);
-  assert(charge_rate(31, 0) == 3.75);            // hot night
-  assert(mood_rate(0, 1) == 8);
-  assert(mood_rate(1, 0) == 5.2);                // rainy night
+  assert(charge_rate(20, 27, 1) == 5);           // a full battery lasts 20 h on a normal day
+  assert(charge_rate(20, 30, 1) == 5);           // exactly 30 °C is not hot
+  assert(charge_rate(20, 31, 1) == 7.5);
+  assert(charge_rate(20, 31, 0) == 3.75);        // hot night
+  assert(std::fabs(charge_rate(24, 27, 1) - 100.0 / 24) < 1e-12);  // you chose 24 h on the admin page
+  assert(charge_rate(0, 27, 1) == 0);            // never divides by zero
+  assert(mood_rate(12.5, 0, 1) == 8);
+  assert(mood_rate(12.5, 1, 0) == 5.2);          // rainy night
 
   assert(brain_level(0) == 1 && brain_level(49) == 1);
   assert(brain_level(50) == 2 && brain_level(299) == 2);

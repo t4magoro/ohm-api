@@ -1,9 +1,21 @@
 import { DurableObject } from "cloudflare:workers";
-import { brainStats, createBrainTables, hear, reply, tokenize } from "./brain";
-import { cooldown, parseClientMessage } from "./guard";
+import { approveWord, blockWord, overview, parseAdminCommand, unblockWord } from "./admin";
+import { brainStats, hear, reply, tokenize } from "./brain";
+import { cooldown, hashIp, parseClientMessage } from "./guard";
 import { lexicon } from "./lexicon";
-import { act, applyWeather, catchUp, isSulking, newPet } from "./pet";
-import type { Brain, FeedEvent, Line, Pet, ServerMsg, Weather } from "./protocol";
+import { act, applyConditions, catchUp, isSulking, newPet, type Conditions } from "./pet";
+import {
+  BANNED,
+  DEFAULT_SETTINGS,
+  type Brain,
+  type FeedEvent,
+  type Line,
+  type Pet,
+  type ServerMsg,
+  type Settings,
+  type Weather,
+} from "./protocol";
+import { migrate } from "./schema";
 import { DEFAULT_WEATHER, fetchBandungWeather, parseWeather } from "./weather";
 
 const MAX_SOCKETS_PER_IP = 5;
@@ -12,7 +24,7 @@ const LINES_SHOWN = 20;
 const WEATHER_EVERY = 15 * 60_000; // Open-Meteo refreshes every 15 minutes
 
 /** What Ohm remembers about each open WebSocket. Stored on the socket, so it survives hibernation. */
-type Visitor = { ip: string; id: string; name: string; helloAt: number };
+type Visitor = { ipHash: string; id: string; name: string; helloAt: number };
 
 // The one and only Ohm. Every visitor connects to this single object, and it handles
 // one message at a time, so there is never more than one copy of Ohm's state.
@@ -25,20 +37,7 @@ export class Ohm extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
-    this.sql.exec("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)");
-    this.sql.exec(
-      "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, at INTEGER, type TEXT, who_id TEXT, who_name TEXT)",
-    );
-    this.sql.exec("CREATE TABLE IF NOT EXISTS lines (id INTEGER PRIMARY KEY, at INTEGER, text TEXT, to_name TEXT)");
-    this.sql.exec(
-      "CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY, at INTEGER, line_id INTEGER, text TEXT, by_id TEXT)",
-    );
-    createBrainTables(this.sql);
-    // Schema changes for tables that already exist on the live Ohm. Each runs once, in order.
-    if ((this.kvGet<number>("schema") ?? 1) < 2) {
-      this.sql.exec("ALTER TABLE events ADD COLUMN detail TEXT");
-      this.kvSet("schema", 2);
-    }
+    migrate(this.sql); // creates or updates the tables: see schema.ts
     // Start the weather alarm if it isn't running yet. With FAKE_WEATHER (local testing only),
     // run it right away, so a changed .dev.vars shows up after a restart.
     ctx.blockConcurrencyWhile(async () => {
@@ -48,20 +47,29 @@ export class Ohm extends DurableObject<Env> {
 
   // A browser opens a WebSocket. The Worker has already checked its Origin.
   async fetch(request: Request): Promise<Response> {
-    const ip = request.headers.get("CF-Connecting-IP") ?? "local";
-    const mine = this.ctx.getWebSockets().filter((ws) => (ws.deserializeAttachment() as Visitor).ip === ip);
+    const ipHash = await hashIp(request.headers.get("CF-Connecting-IP") ?? "local", this.env.IP_SALT ?? "");
+    if (this.banned(ipHash)) {
+      // Browsers hide why a WebSocket was refused, so accept it and close it straight away with
+      // the "banned" code. The page can read that, show "Banned" and stop retrying.
+      const pair = new WebSocketPair();
+      pair[1].accept();
+      pair[1].close(BANNED, "Banned");
+      return new Response(null, { status: 101, webSocket: pair[0] });
+    }
+    const mine = this.ctx.getWebSockets().filter((ws) => (ws.deserializeAttachment() as Visitor).ipHash === ipHash);
     if (mine.length >= MAX_SOCKETS_PER_IP) return new Response("Too many connections", { status: 429 });
 
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1]); // hibernation API: Ohm can sleep while sockets stay open
-    pair[1].serializeAttachment({ ip, id: "", name: "Guest", helloAt: 0 } satisfies Visitor);
+    pair[1].serializeAttachment({ ipHash, id: "", name: "Guest", helloAt: 0 } satisfies Visitor);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
   async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer) {
+    const me = ws.deserializeAttachment() as Visitor;
+    if (this.banned(me.ipHash)) return ws.close(BANNED, "Banned");
     const msg = parseClientMessage(raw);
     if (!msg) return this.send(ws, { t: "error", msg: "Ohm didn't understand that message" });
-    const me = ws.deserializeAttachment() as Visitor;
     const now = Date.now();
 
     if (msg.t === "hello") {
@@ -77,11 +85,11 @@ export class Ohm extends DurableObject<Env> {
     if (msg.t === "say") return this.say(ws, me, msg.text, now);
     if (msg.t === "report") return this.report(ws, me, msg.lineId, now);
 
-    if (!this.careAllowed(me.ip, now)) {
+    if (!this.careAllowed(me.ipHash, now)) {
       return this.send(ws, { t: "error", msg: "Slow down: one action every 3 seconds" });
     }
     const pet = this.load(now);
-    const problem = act(pet, msg.t, now, this.weather());
+    const problem = act(pet, msg.t, now, this.conditions());
     if (problem) return this.send(ws, { t: "error", msg: problem });
     this.save(pet);
     this.broadcast({ t: "event", e: this.log(now, msg.t, me.id, me.name) });
@@ -90,7 +98,7 @@ export class Ohm extends DurableObject<Env> {
 
   /** A visitor talks to Ohm. Ohm learns from it and answers everyone, using only words it knows. */
   private say(ws: WebSocket, me: Visitor, text: string, now: number) {
-    if (!this.sayAllowed(me.ip, now)) {
+    if (!this.sayAllowed(me.ipHash, now)) {
       return this.send(ws, { t: "error", msg: "Ohm is still thinking: one message every 10 seconds" });
     }
     const pet = this.load(now);
@@ -108,26 +116,27 @@ export class Ohm extends DurableObject<Env> {
     if (isSulking(pet, now)) {
       answer = "… (Ohm is sulking. Play with it first)";
     } else {
-      act(pet, "chat", now, this.weather());
+      act(pet, "chat", now, this.conditions());
       this.save(pet);
       answer = reply(this.sql, words) ?? "beep?";
       if (!this.weather().isDay) answer = `zzz… ${answer}`; // it talks in its sleep
     }
     const line = this.sql
       .exec<Line>(
-        `INSERT INTO lines (at, text, to_name) VALUES (?, ?, ?) RETURNING id, at, text, to_name AS "to"`,
+        `INSERT INTO lines (at, text, to_name, ip_hash) VALUES (?, ?, ?, ?) RETURNING id, at, text, to_name AS "to"`,
         now,
         answer,
         me.name,
+        me.ipHash,
       )
       .one();
     this.broadcast({ t: "line", line });
     this.broadcast(this.stateMsg(pet, now));
   }
 
-  /** A visitor flags one of Ohm's lines. You'll review reports on the admin page (Phase 3b). */
+  /** A visitor flags one of Ohm's lines. It shows up on your admin page. */
   private report(ws: WebSocket, me: Visitor, lineId: number, now: number) {
-    if (!this.reportAllowed(me.ip, now)) return this.send(ws, { t: "error", msg: "One report every 30 seconds" });
+    if (!this.reportAllowed(me.ipHash, now)) return this.send(ws, { t: "error", msg: "One report every 30 seconds" });
     const line = this.sql.exec<{ text: string }>("SELECT text FROM lines WHERE id = ?", lineId).toArray()[0];
     if (!line) return this.send(ws, { t: "error", msg: "That line doesn't exist" });
     this.sql.exec("INSERT INTO reports (at, line_id, text, by_id) VALUES (?, ?, ?, ?)", now, lineId, line.text, me.id);
@@ -168,10 +177,53 @@ export class Ohm extends DurableObject<Env> {
     return { pet: this.load(now), weather: this.weather(), brain: this.brain(), online: this.online(), now };
   }
 
+  /** For the admin page. The Worker has already checked your token. */
+  async adminOverview() {
+    return overview(this.sql, this.settings());
+  }
+
+  async admin(action: string, body: unknown): Promise<{ ok: true } | { error: string }> {
+    const cmd = parseAdminCommand(action, body);
+    if (!cmd) return { error: `Bad "${action}" request` };
+    const now = Date.now();
+
+    if (cmd.do === "approve") approveWord(this.sql, cmd.word, cmd.lang, now);
+    else if (cmd.do === "block") blockWord(this.sql, cmd.word);
+    else if (cmd.do === "unblock") unblockWord(this.sql, cmd.word);
+    else if (cmd.do === "unban") this.sql.exec("DELETE FROM bans WHERE ip_hash = ?", cmd.ipHash);
+    else if (cmd.do === "dismiss") this.sql.exec("DELETE FROM reports WHERE id = ?", cmd.id);
+    else if (cmd.do === "ban") {
+      this.sql.exec("INSERT INTO bans (ip_hash, at) VALUES (?, ?) ON CONFLICT (ip_hash) DO NOTHING", cmd.ipHash, now);
+      for (const ws of this.ctx.getWebSockets()) {
+        if ((ws.deserializeAttachment() as Visitor).ipHash === cmd.ipHash) ws.close(BANNED, "Banned");
+      }
+    } else if (cmd.do === "unsay") {
+      this.sql.exec("DELETE FROM lines WHERE id = ?", cmd.id);
+      this.sql.exec("DELETE FROM reports WHERE line_id = ?", cmd.id);
+      this.broadcast({ t: "unsay", id: cmd.id });
+    } else if (cmd.do === "settings") {
+      const pet = this.load(now); // catch up at the old speed first
+      this.kvSet("settings", cmd.settings);
+      applyConditions(pet, this.conditions(), now);
+      this.save(pet);
+      this.broadcast(this.stateMsg(pet, now)); // every open page switches speed right away
+    }
+
+    if (cmd.do === "approve" || cmd.do === "block") {
+      this.kvSet("brain", brainStats(this.sql));
+      this.broadcast(this.stateMsg(this.load(now), now)); // the Spellbook updates everywhere
+    }
+    return { ok: true };
+  }
+
+  private banned(ipHash: string) {
+    return this.sql.exec("SELECT 1 FROM bans WHERE ip_hash = ?", ipHash).toArray().length > 0;
+  }
+
   private setWeather(weather: Weather, now: number) {
     const pet = this.load(now); // catch up at the old speed first
-    applyWeather(pet, weather, now);
     this.kvSet("weather", weather);
+    applyConditions(pet, this.conditions(), now);
     this.save(pet);
     this.broadcast(this.stateMsg(pet, now));
   }
@@ -180,7 +232,15 @@ export class Ohm extends DurableObject<Env> {
     return this.kvGet<Weather>("weather") ?? DEFAULT_WEATHER;
   }
 
-  /** Kept in kv and recalculated only when Ohm learns a word, so it's cheap to send often. */
+  private settings(): Settings {
+    return this.kvGet<Settings>("settings") ?? DEFAULT_SETTINGS;
+  }
+
+  private conditions(): Conditions {
+    return { weather: this.weather(), settings: this.settings() };
+  }
+
+  /** Kept in kv and recalculated only when the vocabulary changes, so it's cheap to send often. */
   private brain(): Brain {
     let brain = this.kvGet<Brain>("brain");
     if (!brain) {
@@ -194,7 +254,7 @@ export class Ohm extends DurableObject<Env> {
   private load(now: number): Pet {
     let pet = this.kvGet<Pet>("pet");
     if (!pet) {
-      pet = newPet(now, this.weather());
+      pet = newPet(now, this.conditions());
       this.save(pet);
     }
     if (catchUp(pet, now)) {

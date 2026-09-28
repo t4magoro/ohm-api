@@ -1,5 +1,6 @@
 // Ohm's brain: a Markov chain. It counts which word follows which in what visitors type,
 // then talks by repeatedly picking a likely next word. It can only say words it has learned.
+// Its tables are created in schema.ts.
 import type { Brain } from "./protocol";
 import { math } from "./wasm";
 import type { Lexicon } from "./words";
@@ -10,18 +11,8 @@ const MAX_WORDS = 20; // words read from one message
 const MAX_REPLY = 12; // words in one reply
 const MAX_WEIGHTS = 4096; // must match pet.cpp
 
-type Who = { id: string; name: string };
+type Who = { id: string; name: string; ipHash: string };
 type Row = { next: string; count: number };
-
-export function createBrainTables(sql: SqlStorage) {
-  sql.exec(
-    "CREATE TABLE IF NOT EXISTS words (word TEXT PRIMARY KEY, langs TEXT, by_id TEXT, by_name TEXT, at INTEGER, uses INTEGER DEFAULT 0, said INTEGER DEFAULT 0)",
-  );
-  sql.exec("CREATE TABLE IF NOT EXISTS grams (p2 TEXT, p1 TEXT, next TEXT, count INTEGER, PRIMARY KEY (p2, p1, next))");
-  sql.exec("CREATE INDEX IF NOT EXISTS grams_p1 ON grams (p1)");
-  sql.exec("CREATE TABLE IF NOT EXISTS pending (word TEXT PRIMARY KEY, seen INTEGER, first_seen INTEGER)");
-  sql.exec("CREATE TABLE IF NOT EXISTS blocked (word TEXT PRIMARY KEY)");
-}
 
 /** "Aku  SUKA kopi!!" → ["aku", "suka", "kopi"]. Keeps letters plus inner ' and - (kupu-kupu, don't). */
 export const tokenize = (text: string) =>
@@ -51,11 +42,12 @@ export function hear(sql: SqlStorage, lexicon: Lexicon, words: string[], who: Wh
       sql.exec("UPDATE words SET uses = uses + 1 WHERE word = ?", w);
     } else if (lexicon.langsOf(w).length > 0) {
       sql.exec(
-        "INSERT INTO words (word, langs, by_id, by_name, at, uses) VALUES (?, ?, ?, ?, ?, 1)",
+        "INSERT INTO words (word, langs, by_id, by_name, ip_hash, at, uses) VALUES (?, ?, ?, ?, ?, ?, 1)",
         w,
         lexicon.langsOf(w).join(","),
         who.id,
         who.name,
+        who.ipHash,
         now,
       );
       learned.push(w);

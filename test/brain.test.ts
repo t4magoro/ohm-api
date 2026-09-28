@@ -1,7 +1,7 @@
-import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { brainStats, createBrainTables, hear, reply, tokenize } from "../src/brain";
+import { brainStats, hear, reply, tokenize } from "../src/brain";
 import { makeLexicon } from "../src/words";
+import { count, testSql } from "./sql";
 
 // In the Worker, wrangler loads pet.wasm. In tests, Node loads the same compiled C++.
 vi.mock("../src/wasm", async () => {
@@ -11,19 +11,7 @@ vi.mock("../src/wasm", async () => {
   return { math: instance.exports };
 });
 
-/** A real SQLite database (Node's built-in one) behind the same exec() the Durable Object has. */
-function testSql() {
-  const db = new DatabaseSync(":memory:");
-  return {
-    exec(query: string, ...params: (string | number | null)[]) {
-      const rows = db.prepare(query).all(...params);
-      return { toArray: () => rows, one: () => rows[0] };
-    },
-  } as unknown as SqlStorage;
-}
-
-const count = (sql: SqlStorage, query: string) => (sql.exec(query).one() as { n: number }).n;
-const RINA = { id: "visitor-rina", name: "Rina" };
+const RINA = { id: "visitor-rina", name: "Rina", ipHash: "0123456789abcdef" };
 const T0 = Date.UTC(2026, 9, 1);
 // A tiny lexicon: "badword" stands in for a real blocked word.
 const lexicon = makeLexicon({ id: "aku\nsuka\nkopi\nhujan", en: "i\nlike\ncoffee\nkopi" }, "badword");
@@ -31,7 +19,6 @@ const lexicon = makeLexicon({ id: "aku\nsuka\nkopi\nhujan", en: "i\nlike\ncoffee
 let sql: SqlStorage;
 beforeEach(() => {
   sql = testSql();
-  createBrainTables(sql);
 });
 
 describe("tokenize", () => {
@@ -43,9 +30,13 @@ describe("tokenize", () => {
 });
 
 describe("hear", () => {
-  it("learns allowed words and credits who taught them", () => {
+  it("learns allowed words and remembers who taught them", () => {
     expect(hear(sql, lexicon, ["aku", "suka", "kopi"], RINA, T0)).toEqual({ blocked: false, learned: ["aku", "suka", "kopi"] });
-    expect(sql.exec("SELECT by_name, langs FROM words WHERE word = 'kopi'").one()).toMatchObject({ by_name: "Rina", langs: "id,en" });
+    expect(sql.exec("SELECT by_name, langs, ip_hash FROM words WHERE word = 'kopi'").one()).toEqual({
+      by_name: "Rina",
+      langs: "id,en",
+      ip_hash: "0123456789abcdef",
+    });
     expect(hear(sql, lexicon, ["aku", "kopi"], RINA, T0).learned).toEqual([]); // already known
   });
 
@@ -53,6 +44,11 @@ describe("hear", () => {
     expect(hear(sql, lexicon, ["aku", "badword"], RINA, T0).blocked).toBe(true);
     expect(count(sql, "SELECT COUNT(*) AS n FROM words")).toBe(0);
     expect(count(sql, "SELECT COUNT(*) AS n FROM grams")).toBe(0);
+  });
+
+  it("words you blocked on the admin page are rejected too", () => {
+    sql.exec("INSERT INTO blocked (word) VALUES ('kopi')");
+    expect(hear(sql, lexicon, ["aku", "kopi"], RINA, T0).blocked).toBe(true);
   });
 
   it("unknown words wait for approval and split the sentence", () => {

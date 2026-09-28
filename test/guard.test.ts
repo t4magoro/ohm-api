@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cooldown, parseClientMessage } from "../src/guard";
+import { cooldown, hashIp, parseClientMessage } from "../src/guard";
 import { cleanName } from "../src/protocol";
 
 describe("parseClientMessage", () => {
@@ -50,5 +50,15 @@ describe("cooldown", () => {
     expect(allow("1.2.3.4", 2_999)).toBe(false);
     expect(allow("5.6.7.8", 2_999)).toBe(true); // other visitors aren't affected
     expect(allow("1.2.3.4", 3_000)).toBe(true);
+  });
+});
+
+describe("hashIp", () => {
+  it("gives 16 hex characters that depend on the secret salt", async () => {
+    const a = await hashIp("1.2.3.4", "salt-one");
+    expect(a).toMatch(/^[0-9a-f]{16}$/);
+    expect(await hashIp("1.2.3.4", "salt-one")).toBe(a); // same IP, same hash: bans keep working
+    expect(await hashIp("1.2.3.4", "salt-two")).not.toBe(a);
+    expect(await hashIp("5.6.7.8", "salt-one")).not.toBe(a);
   });
 });
