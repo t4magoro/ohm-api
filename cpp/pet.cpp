@@ -27,7 +27,7 @@ double empty_at(double v, double at, double rate) {
 // Drain rates in points per hour. At night Ohm sleeps, so everything drains at half speed.
 EXPORT("charge_rate")
 double charge_rate(double temp_c, int is_day) {
-  return 500.0 * (is_day ? 1.0 : 0.5) * (temp_c > 30 ? 1.5 : 1.0);  // 100 -> 0 in 20 h
+  return 5.0 * (is_day ? 1.0 : 0.5) * (temp_c > 30 ? 1.5 : 1.0);  // 100 -> 0 in 20 h
 }
 
 EXPORT("mood_rate")
