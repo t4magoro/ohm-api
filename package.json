@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "npm run build:wasm && vitest run",
     "dev": "wrangler dev --ip 0.0.0.0 --port 8787",
     "build:wasm": "clang++ --target=wasm32 -std=c++20 -O2 -nostdlib -fno-exceptions -fno-rtti -Wl,--no-entry -o src/pet.wasm cpp/pet.cpp",
     "test:cpp": "g++ -std=c++20 -g -Wall -fsanitize=address,undefined cpp/pet_test.cpp -o /tmp/pet_test && setarch $(uname -m) -R /tmp/pet_test",
@@ -10,6 +11,7 @@
   },
   "devDependencies": {
     "typescript": "^7.0.2",
+    "vitest": "^5.0.2",
     "wrangler": "^4.142.0"
   }
 }

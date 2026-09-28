@@ -4,5 +4,8 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
   // Recompile the C++ before every dev start and deploy, and whenever a file in cpp/ changes.
-  "build": { "command": "npm run build:wasm", "watch_dir": "cpp" }
+  "build": { "command": "npm run build:wasm", "watch_dir": "cpp" },
+  // The one Ohm. "new_sqlite_classes" gives it a built-in SQLite database (the free plan requires SQLite).
+  "durable_objects": { "bindings": [{ "name": "OHM", "class_name": "Ohm" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Ohm"] }]
 }

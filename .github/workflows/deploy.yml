@@ -32,6 +32,9 @@ jobs:
       - name: Build C++ to WebAssembly
         run: npm run build:wasm
 
+      - name: Unit tests
+        run: npm test
+
       - name: Typecheck
         run: npm run typecheck
 
@@ -64,4 +67,4 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Smoke check
-        run: curl --fail --retry 5 --retry-delay 5 --retry-all-errors "${{ vars.API_URL }}/hello"
+        run: curl --fail --retry 5 --retry-delay 5 --retry-all-errors "${{ vars.API_URL }}/state"
