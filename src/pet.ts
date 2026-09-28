@@ -1,23 +1,25 @@
 // Ohm's rules. The math comes from C++ (pet.cpp); this file decides what happens.
-import type { Pet, Stat } from "./protocol";
+import type { Pet, Stat, Weather } from "./protocol";
 import { math } from "./wasm";
 
 const MAX = 100;
 const CHARGE_GAIN = 15;
 const PLAY_GAIN = 10;
 const REBOOT_LEVEL = 30;
-// ponytail: fixed Bandung weather until Phase 2 fetches the real one.
-const WEATHER = { tempC: 27, raining: false, isDay: true };
 
-const rates = () => ({
-  charge: math.charge_rate(WEATHER.tempC, WEATHER.isDay ? 1 : 0),
-  mood: math.mood_rate(WEATHER.raining ? 1 : 0, WEATHER.isDay ? 1 : 0),
+/** Drain speeds for this weather, from the C++. */
+const rates = (w: Weather) => ({
+  charge: math.charge_rate(w.tempC, w.isDay ? 1 : 0),
+  mood: math.mood_rate(w.raining ? 1 : 0, w.isDay ? 1 : 0),
 });
 
 const valueNow = (s: Stat, now: number) => math.value_now(s.v, s.at, s.rate, now);
 
-export function newPet(now: number): Pet {
-  const r = rates();
+/** Keeps the value reached so far, then drains at `rate` from `now` on. */
+const checkpoint = (s: Stat, now: number, rate: number): Stat => ({ v: valueNow(s, now), at: now, rate });
+
+export function newPet(now: number, weather: Weather): Pet {
+  const r = rates(weather);
   return {
     status: "on",
     charge: { v: MAX, at: now, rate: r.charge },
@@ -38,16 +40,24 @@ export function catchUp(pet: Pet, now: number): boolean {
   pet.status = "off";
   pet.offAt = offAt;
   pet.charge = { v: 0, at: offAt, rate: 0 };
-  pet.mood = { v: valueNow(pet.mood, offAt), at: offAt, rate: 0 };
+  pet.mood = checkpoint(pet.mood, offAt, 0);
   pet.recordMs = Math.max(pet.recordMs, offAt - pet.bornAt);
   return true;
 }
 
+/** The weather changed: both bars switch to the new speed without jumping. Call catchUp first. */
+export function applyWeather(pet: Pet, weather: Weather, now: number) {
+  if (pet.status === "off") return; // an Ohm that's off doesn't drain
+  const r = rates(weather);
+  pet.charge = checkpoint(pet.charge, now, r.charge);
+  pet.mood = checkpoint(pet.mood, now, r.mood);
+}
+
 /** Applies a visitor's action. Returns an error message, or null if it worked. */
-export function act(pet: Pet, action: "charge" | "play" | "reboot", now: number): string | null {
+export function act(pet: Pet, action: "charge" | "play" | "reboot", now: number, weather: Weather): string | null {
   if (action === "reboot") {
     if (pet.status === "on") return "Ohm is already on";
-    const r = rates();
+    const r = rates(weather);
     pet.status = "on";
     pet.charge = { v: REBOOT_LEVEL, at: now, rate: r.charge };
     pet.mood = { v: REBOOT_LEVEL, at: now, rate: r.mood };

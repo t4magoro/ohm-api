@@ -7,5 +7,7 @@
   "build": { "command": "npm run build:wasm", "watch_dir": "cpp" },
   // The one Ohm. "new_sqlite_classes" gives it a built-in SQLite database (the free plan requires SQLite).
   "durable_objects": { "bindings": [{ "name": "OHM", "class_name": "Ohm" }] },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Ohm"] }]
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Ohm"] }],
+  // Empty = real Bandung weather. Your .dev.vars can set a fake one for local testing.
+  "vars": { "FAKE_WEATHER": "" }
 }

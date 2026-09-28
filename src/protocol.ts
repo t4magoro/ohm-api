@@ -14,6 +14,9 @@ export type Pet = {
   recordMs: number; // longest life so far
 };
 
+/** Bandung right now. Heat drains the battery, rain drains the mood, night halves both. */
+export type Weather = { tempC: number; raining: boolean; isDay: boolean };
+
 export type FeedEvent = {
   id: number;
   at: number;
@@ -28,7 +31,7 @@ export type ClientMsg =
   | { t: "reboot" };
 
 export type ServerMsg =
-  | { t: "state"; pet: Pet; now: number }
+  | { t: "state"; pet: Pet; weather: Weather; now: number }
   | { t: "online"; online: number }
   | { t: "feed"; events: FeedEvent[] }
   | { t: "event"; e: FeedEvent }
