@@ -24,13 +24,53 @@ double empty_at(double v, double at, double rate) {
   return rate > 0 ? at + v / rate * HOUR : __builtin_inf();
 }
 
-// Drain rates in points per hour. At night Ohm sleeps, so everything drains at half speed.
+// Drain rates in points per hour. `hours` is how long a full bar lasts on a normal day
+// (you set it on the admin page). At night Ohm sleeps, so everything drains at half speed.
 EXPORT("charge_rate")
-double charge_rate(double temp_c, int is_day) {
-  return 5.0 * (is_day ? 1.0 : 0.5) * (temp_c > 30 ? 1.5 : 1.0);  // 100 -> 0 in 20 h
+double charge_rate(double hours, double temp_c, int is_day) {
+  if (hours <= 0) return 0;  // the server only allows 1-168; this is a last safety net
+  return 100.0 / hours * (is_day ? 1.0 : 0.5) * (temp_c > 30 ? 1.5 : 1.0);
 }
 
 EXPORT("mood_rate")
-double mood_rate(int raining, int is_day) {
-  return 8.0 * (is_day ? 1.0 : 0.5) * (raining ? 1.3 : 1.0);  // 100 -> 0 in ~12 h
+double mood_rate(double hours, int raining, int is_day) {
+  if (hours <= 0) return 0;
+  return 100.0 / hours * (is_day ? 1.0 : 0.5) * (raining ? 1.3 : 1.0);
+}
+
+// Ohm's brain grows with its vocabulary. 1: random known words, 2: each word follows
+// the previous word, 3: each word follows the previous two.
+EXPORT("brain_level")
+int brain_level(int vocab) { return vocab < 50 ? 1 : vocab < 300 ? 2 : 3; }
+
+// Language level 0-5, from how many words of that language Ohm knows.
+EXPORT("lang_level")
+int lang_level(int words) {
+  constexpr int steps[] = {10, 50, 150, 400, 1000};
+  int level = 0;
+  for (int s : steps) if (words >= s) level++;
+  return level;
+}
+
+// Weighted random pick for the Markov chain. JS writes up to MAX_WEIGHTS counts into
+// `weights`, a fixed buffer (no heap, like MCU firmware), then calls pick_weighted.
+constexpr int MAX_WEIGHTS = 4096;
+static int weights[MAX_WEIGHTS];
+
+EXPORT("weights_ptr")
+int* weights_ptr() { return weights; }
+
+// r is random in [0, 1). Returns the chosen index, or -1 if there's nothing to pick.
+EXPORT("pick_weighted")
+int pick_weighted(int n, double r) {
+  if (n <= 0 || n > MAX_WEIGHTS) return -1;
+  double total = 0;
+  for (int i = 0; i < n; i++) total += weights[i];
+  if (total <= 0) return -1;
+  double x = r * total;
+  for (int i = 0; i < n; i++) {
+    x -= weights[i];
+    if (x < 0) return i;
+  }
+  return n - 1;  // only reached through float rounding
 }

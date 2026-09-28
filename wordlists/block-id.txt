@@ -1,0 +1,5 @@
+# Indonesian (and Sundanese/Javanese) words Ohm must never learn, one per line.
+# You write this list: you know which words are offensive in your community.
+# Lines starting with # are comments. After editing, run tools/build_wordlists.py again.
+henceut
+memek
