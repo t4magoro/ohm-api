@@ -1,0 +1,5 @@
+node_modules/
+.wrangler/
+.dev.vars
+src/pet.wasm
+worker-configuration.d.ts

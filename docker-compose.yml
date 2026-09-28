@@ -1,0 +1,11 @@
+services:
+  api:
+    build: .
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    security_opt:
+      - seccomp=unconfined # lets setarch turn off address randomization for the C++ test
+    ports:
+      - "8787:8787"
+    volumes:
+      - .:/app
