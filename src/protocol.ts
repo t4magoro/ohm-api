@@ -17,25 +17,40 @@ export type Pet = {
 /** Bandung right now. Heat drains the battery, rain drains the mood, night halves both. */
 export type Weather = { tempC: number; raining: boolean; isDay: boolean };
 
+/** What Ohm knows, for the Spellbook. Levels come from pet.cpp. */
+export type LangStat = { words: number; level: number };
+export type Brain = { vocab: number; level: number; langs: { id: LangStat; en: LangStat } };
+
+/** Something Ohm said, in reply to a visitor. Visitors' own messages are never shown to others. */
+export type Line = { id: number; at: number; text: string; to: string };
+
 export type FeedEvent = {
   id: number;
   at: number;
-  type: "charge" | "play" | "reboot" | "shutdown";
+  type: "charge" | "play" | "reboot" | "shutdown" | "taught";
   name: string;
+  detail: string | null; // the words, for "taught"
 };
 
 export type ClientMsg =
   | { t: "hello"; id: string; name: string }
   | { t: "charge" }
   | { t: "play" }
-  | { t: "reboot" };
+  | { t: "reboot" }
+  | { t: "say"; text: string }
+  | { t: "report"; lineId: number };
 
 export type ServerMsg =
-  | { t: "state"; pet: Pet; weather: Weather; now: number }
+  | { t: "state"; pet: Pet; weather: Weather; brain: Brain; now: number }
   | { t: "online"; online: number }
   | { t: "feed"; events: FeedEvent[] }
   | { t: "event"; e: FeedEvent }
+  | { t: "lines"; lines: Line[] }
+  | { t: "line"; line: Line }
+  | { t: "notice"; msg: string }
   | { t: "error"; msg: string };
+
+export const MAX_SAY = 200; // characters in one chat message
 
 // Same formula as value_now in pet.cpp. The browser uses it to animate the bars;
 // the server's C++ is the source of truth.

@@ -10,10 +10,23 @@ describe("parseClientMessage", () => {
       id: "abc12345",
       name: "Rina",
     });
+    expect(parseClientMessage('{"t":"say","text":"aku suka kopi"}')).toEqual({ t: "say", text: "aku suka kopi" });
+    expect(parseClientMessage('{"t":"report","lineId":7}')).toEqual({ t: "report", lineId: 7 });
   });
 
   it("rejects junk", () => {
-    const junk = ["not json", "null", "[]", '{"t":"explode"}', '{"t":"hello","id":"x","name":"Rina"}', "x".repeat(2000)];
+    const junk = [
+      "not json",
+      "null",
+      "[]",
+      '{"t":"explode"}',
+      '{"t":"hello","id":"x","name":"Rina"}',
+      '{"t":"say","text":"   "}',
+      JSON.stringify({ t: "say", text: "a".repeat(201) }),
+      '{"t":"report","lineId":"7"}',
+      '{"t":"report","lineId":-1}',
+      "x".repeat(2000),
+    ];
     for (const raw of junk) expect(parseClientMessage(raw)).toBeNull();
     expect(parseClientMessage(new ArrayBuffer(8))).toBeNull();
   });

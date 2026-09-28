@@ -3,8 +3,7 @@ import type { Pet, Stat, Weather } from "./protocol";
 import { math } from "./wasm";
 
 const MAX = 100;
-const CHARGE_GAIN = 15;
-const PLAY_GAIN = 10;
+const GAIN = { charge: 15, play: 10, chat: 2 }; // chat: talking to Ohm cheers it up a little
 const REBOOT_LEVEL = 30;
 
 /** Drain speeds for this weather, from the C++. */
@@ -31,6 +30,9 @@ export function newPet(now: number, weather: Weather): Pet {
   };
 }
 
+/** At mood 0, Ohm sulks: it won't talk until someone plays with it. */
+export const isSulking = (pet: Pet, now: number) => pet.status === "on" && valueNow(pet.mood, now) === 0;
+
 /** Applies the drain up to `now`. Returns true if Ohm just shut down. */
 export function catchUp(pet: Pet, now: number): boolean {
   if (pet.status === "off") return false;
@@ -53,8 +55,13 @@ export function applyWeather(pet: Pet, weather: Weather, now: number) {
   pet.mood = checkpoint(pet.mood, now, r.mood);
 }
 
-/** Applies a visitor's action. Returns an error message, or null if it worked. */
-export function act(pet: Pet, action: "charge" | "play" | "reboot", now: number, weather: Weather): string | null {
+/** Applies an action. Returns an error message, or null if it worked. */
+export function act(
+  pet: Pet,
+  action: "charge" | "play" | "chat" | "reboot",
+  now: number,
+  weather: Weather,
+): string | null {
   if (action === "reboot") {
     if (pet.status === "on") return "Ohm is already on";
     const r = rates(weather);
@@ -68,8 +75,7 @@ export function act(pet: Pet, action: "charge" | "play" | "reboot", now: number,
   }
   if (pet.status === "off") return "Ohm is off. Reboot it first";
   const key = action === "charge" ? "charge" : "mood";
-  const gain = action === "charge" ? CHARGE_GAIN : PLAY_GAIN;
   const s = pet[key];
-  pet[key] = { v: Math.min(MAX, valueNow(s, now) + gain), at: now, rate: s.rate };
+  pet[key] = { v: Math.min(MAX, valueNow(s, now) + GAIN[action]), at: now, rate: s.rate };
   return null;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { act, applyWeather, catchUp, newPet } from "../src/pet";
+import { act, applyWeather, catchUp, newPet,isSulking } from "../src/pet";
 
 // In the Worker, wrangler loads pet.wasm. In tests, Node loads the same compiled C++.
 // Run `npm run build:wasm` first (`npm test` does it for you).
@@ -78,5 +78,21 @@ describe("weather", () => {
     catchUp(pet, T0 + 30 * HOUR);
     act(pet, "reboot", T0 + 30 * HOUR, NIGHT);
     expect(pet.charge.rate).toBe(2.5);
+  });
+});
+
+describe("chat", () => {
+  it("talking cheers Ohm up a little", () => {
+    const pet = newPet(T0, DAY);
+    act(pet, "chat", T0 + 5 * HOUR, DAY); // mood 60 + 2
+    expect(pet.mood.v).toBe(62);
+  });
+
+  it("at mood 0 Ohm sulks until someone plays with it", () => {
+    const pet = newPet(T0, DAY);
+    expect(isSulking(pet, T0 + 12 * HOUR)).toBe(false); // mood 4
+    expect(isSulking(pet, T0 + 13 * HOUR)).toBe(true);
+    act(pet, "play", T0 + 13 * HOUR, DAY);
+    expect(isSulking(pet, T0 + 13 * HOUR)).toBe(false);
   });
 });
