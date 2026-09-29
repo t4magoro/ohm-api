@@ -1,7 +1,7 @@
 // What you can do on the admin page. The page itself is public JavaScript and only the token
 // is secret, so every request is checked here again, like any other input from outside.
 import { tokenize } from "./brain";
-import { HOURS_RANGE, type AdminOverview, type Settings } from "./protocol";
+import { HOURS_RANGE, type AdminOverview, type AdminSearch, type Settings } from "./protocol";
 import type { Lang } from "./words";
 
 export type AdminCommand =
@@ -79,5 +79,34 @@ export function overview(sql: SqlStorage, settings: Settings): AdminOverview {
       .toArray(),
     blocked: sql.exec<O["blocked"][number]>("SELECT word FROM blocked ORDER BY word").toArray(),
     bans: sql.exec<O["bans"][number]>("SELECT ip_hash AS ipHash, at FROM bans ORDER BY at DESC").toArray(),
+  };
+}
+
+/** The search box's text, tidied: 1 to 32 characters, lowercase like every word Ohm stores. Null if not allowed. */
+export function cleanQuery(q: string | null): string | null {
+  const s = (q ?? "").trim().toLowerCase();
+  return s.length >= 1 && s.length <= 32 ? s : null;
+}
+
+/** Words that contain `q`, in every word list, so old words can be found without scrolling. */
+export function search(sql: SqlStorage, q: string): AdminSearch {
+  type S = AdminSearch;
+  // In LIKE, % and _ are wildcards. Put ! in front of them (and of ! itself) so they match themselves.
+  const like = `%${q.replace(/[!%_]/g, "!$&")}%`;
+  // ponytail: LIKE '%q%' reads the whole table; fine for a few thousand words and a rare admin search.
+  return {
+    q,
+    words: sql
+      .exec<S["words"][number]>(
+        `SELECT word, by_name AS "by", ip_hash AS ipHash, at FROM words WHERE word LIKE ? ESCAPE '!' ORDER BY word LIMIT 50`,
+        like,
+      )
+      .toArray(),
+    pending: sql
+      .exec<S["pending"][number]>("SELECT word, seen FROM pending WHERE word LIKE ? ESCAPE '!' ORDER BY word LIMIT 50", like)
+      .toArray(),
+    blocked: sql
+      .exec<S["blocked"][number]>("SELECT word FROM blocked WHERE word LIKE ? ESCAPE '!' ORDER BY word LIMIT 50", like)
+      .toArray(),
   };
 }

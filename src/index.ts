@@ -1,3 +1,5 @@
+import { cleanQuery } from "./admin";
+
 export { Ohm } from "./ohm";
 
 // Only these websites may open the WebSocket or use the admin API from a browser.
@@ -50,6 +52,11 @@ export default {
       }
       const action = url.pathname.slice("/admin/".length);
       if (request.method === "GET" && action === "overview") return Response.json(await ohm.adminOverview(), { headers });
+      if (request.method === "GET" && action === "search") {
+        const q = cleanQuery(url.searchParams.get("q"));
+        if (!q) return Response.json({ error: "Search for 1 to 32 characters" }, { status: 400, headers });
+        return Response.json(await ohm.adminSearch(q), { headers });
+      }
       if (request.method === "POST") {
         const result = await ohm.admin(action, await request.json().catch(() => null));
         return Response.json(result, { status: "error" in result ? 400 : 200, headers });

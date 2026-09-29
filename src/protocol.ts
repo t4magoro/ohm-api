@@ -94,6 +94,9 @@ export type AdminOverview = {
   bans: { ipHash: string; at: number }[];
 };
 
+/** What the admin search box finds (GET /admin/search?q=): the word lists, only words containing `q`. */
+export type AdminSearch = Pick<AdminOverview, "words" | "pending" | "blocked"> & { q: string };
+
 export const MAX_SAY = 200; // characters in one chat message
 export const BANNED = 4003; // WebSocket close code for a banned visitor
 
