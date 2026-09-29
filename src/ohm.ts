@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { approveWord, blockWord, overview, parseAdminCommand, unblockWord } from "./admin";
+import { approveWord, blockWord, overview, parseAdminCommand, search, unblockWord } from "./admin";
 import { brainStats, hasBlocked, hear, reply, tokenize } from "./brain";
 import { cooldown, hashIp, parseClientMessage } from "./guard";
 import { lexicon } from "./lexicon";
@@ -213,6 +213,11 @@ export class Ohm extends DurableObject<Env> {
   /** For the admin page. The Worker has already checked your token. */
   async adminOverview() {
     return overview(this.sql, this.settings());
+  }
+
+  /** For the admin search box. `q` is already tidied by cleanQuery. */
+  async adminSearch(q: string) {
+    return search(this.sql, q);
   }
 
   async admin(action: string, body: unknown): Promise<{ ok: true } | { error: string }> {

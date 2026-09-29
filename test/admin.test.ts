@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { approveWord, blockWord, overview, parseAdminCommand, unblockWord } from "../src/admin";
+import { approveWord, blockWord, cleanQuery, overview, parseAdminCommand, search, unblockWord } from "../src/admin";
 import { hear } from "../src/brain";
 import { DEFAULT_SETTINGS } from "../src/protocol";
 import { migrate } from "../src/schema";
@@ -74,6 +74,24 @@ describe("word moderation", () => {
     expect(o.pending).toEqual([{ word: "wkwk", seen: 1 }]);
     expect(o.words).toEqual([{ word: "aku", by: "Rina", ipHash: "0123456789abcdef", at: T0 }]);
     expect(o.settings).toEqual(DEFAULT_SETTINGS);
+  });
+
+  it("search finds a word in every list, and % or _ only match themselves", () => {
+    hear(sql, lexicon, ["aku", "suka", "wkwk"], RINA, T0);
+    blockWord(sql, "kopi");
+    const found = search(sql, "k");
+    expect(found.words.map((w) => w.word)).toEqual(["aku", "suka"]);
+    expect(found.pending).toEqual([{ word: "wkwk", seen: 1 }]);
+    expect(found.blocked).toEqual([{ word: "kopi" }]);
+    expect(search(sql, "%").words).toEqual([]);
+    expect(search(sql, "_").words).toEqual([]);
+  });
+
+  it("cleanQuery tidies the search box and refuses empty or huge searches", () => {
+    expect(cleanQuery("  KoPi ")).toBe("kopi");
+    expect(cleanQuery("   ")).toBeNull();
+    expect(cleanQuery(null)).toBeNull();
+    expect(cleanQuery("x".repeat(33))).toBeNull();
   });
 });
 
