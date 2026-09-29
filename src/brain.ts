@@ -27,13 +27,17 @@ export const tokenize = (text: string) =>
 
 const exists = (sql: SqlStorage, query: string, word: string) => sql.exec(query, word).toArray().length > 0;
 
+/** True if any word is on a blocklist: the built-in one or the one you edit on the admin page. */
+export const hasBlocked = (sql: SqlStorage, lexicon: Lexicon, words: string[]) =>
+  words.some((w) => lexicon.isBlocked(w) || exists(sql, "SELECT 1 FROM blocked WHERE word = ?", w));
+
 /**
  * Ohm hears a message. Allowed new words join its vocabulary, unknown words wait in the
  * queue for your approval, and word triples are counted. One blocked word rejects everything.
  */
 export function hear(sql: SqlStorage, lexicon: Lexicon, words: string[], who: Who, now: number) {
-  const blocked = (w: string) => lexicon.isBlocked(w) || exists(sql, "SELECT 1 FROM blocked WHERE word = ?", w);
-  if (words.some(blocked)) return { blocked: true, learned: [] as string[] };
+  if (hasBlocked(sql, lexicon, words)) return { blocked: true, learned: [] as string[] };
+
 
   const learned: string[] = [];
   const pieces: string[][] = [[]];

@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { approveWord, blockWord, overview, parseAdminCommand, unblockWord } from "./admin";
-import { brainStats, hear, reply, tokenize } from "./brain";
+import { brainStats, hasBlocked, hear, reply, tokenize } from "./brain";
 import { cooldown, hashIp, parseClientMessage } from "./guard";
 import { lexicon } from "./lexicon";
 import { act, applyConditions, catchUp, isSulking, newPet, type Conditions } from "./pet";
@@ -80,7 +80,10 @@ export class Ohm extends DurableObject<Env> {
     if (msg.t === "hello") {
       // One hello per socket every 2 s: it's sent once on connect and again on rename.
       if (now - me.helloAt < 2_000) return this.send(ws, { t: "error", msg: "Slow down: try again in a moment" });
-      ws.serializeAttachment({ ...me, id: msg.id, name: msg.name, helloAt: now } satisfies Visitor);
+            // Names show up in everyone's feed, so they pass the same word check as chat messages.
+      const nameOk = !hasBlocked(this.sql, lexicon, tokenize(msg.name));
+      if (!nameOk) this.send(ws, { t: "error", msg: "That name isn't allowed. Pick another one" });
+      ws.serializeAttachment({ ...me, id: msg.id, name: nameOk ? msg.name : me.name, helloAt: now } satisfies Visitor);
       this.send(ws, this.stateMsg(this.load(now), now));
       this.send(ws, { t: "feed", events: this.feed() });
       this.send(ws, { t: "lines", lines: this.lines() });
@@ -106,7 +109,7 @@ export class Ohm extends DurableObject<Env> {
     this.broadcast(this.stateMsg(pet, now));
   }
 
-  /** A visitor talks to Ohm. Ohm learns from it and answers everyone, using only words it knows. */
+    /** A visitor talks to Ohm. Ohm answers everyone with words it already knew, then learns from the message. */
   private say(ws: WebSocket, me: Visitor, text: string, now: number) {
     if (!this.sayAllowed(me.ipHash, now)) {
       return this.send(ws, { t: "error", msg: "Ohm is still thinking: one message every 10 seconds" });
@@ -115,14 +118,12 @@ export class Ohm extends DurableObject<Env> {
     if (pet.status === "off") return this.send(ws, { t: "error", msg: "Ohm is off. Reboot it first" });
 
     const words = tokenize(text);
-    const heard = hear(this.sql, lexicon, words, me, now);
-    if (heard.blocked) return this.send(ws, { t: "error", msg: "Ohm covers its ears 🙉 That word isn't allowed" });
-    if (heard.learned.length > 0) {
-      this.kvSet("brain", brainStats(this.sql));
-      this.broadcast({ t: "event", e: this.log(now, "taught", me.id, me.name, heard.learned.join(", ")) });
-      this.unlock(pet, now);
+    if (hasBlocked(this.sql, lexicon, words)) {
+      return this.send(ws, { t: "error", msg: "Ohm covers its ears 🙉 That word isn't allowed" });
     }
 
+    // Answer first, learn second. The other way round, a sentence full of new words comes
+    // straight back out of Ohm, word for word, to everyone online.
     let answer: string;
     if (isSulking(pet, now)) {
       answer = "… (Ohm is sulking. Play with it first)";
@@ -131,6 +132,13 @@ export class Ohm extends DurableObject<Env> {
       this.save(pet);
       answer = reply(this.sql, words) ?? "beep?";
       if (!this.weather().isDay) answer = `zzz… ${answer}`; // it talks in its sleep
+    }
+
+    const heard = hear(this.sql, lexicon, words, me, now);
+    if (heard.learned.length > 0) {
+      this.kvSet("brain", brainStats(this.sql));
+      this.broadcast({ t: "event", e: this.log(now, "taught", me.id, me.name, heard.learned.join(", ")) });
+      this.unlock(pet, now);
     }
     const line = this.sql
       .exec<Line>(

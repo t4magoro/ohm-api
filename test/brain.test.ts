@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { brainStats, hear, reply, tokenize } from "../src/brain";
+import { brainStats, hasBlocked, hear, reply, tokenize } from "../src/brain";
 import { makeLexicon } from "../src/words";
 import { count, testSql } from "./sql";
 
@@ -49,6 +49,11 @@ describe("hear", () => {
   it("words you blocked on the admin page are rejected too", () => {
     sql.exec("INSERT INTO blocked (word) VALUES ('kopi')");
     expect(hear(sql, lexicon, ["aku", "kopi"], RINA, T0).blocked).toBe(true);
+  });
+
+  it("the same check works on nicknames", () => {
+    expect(hasBlocked(sql, lexicon, tokenize("BadWord-99"))).toBe(true); // digits and dashes don't hide it
+    expect(hasBlocked(sql, lexicon, tokenize("Rina_07"))).toBe(false);
   });
 
   it("unknown words wait for approval and split the sentence", () => {
