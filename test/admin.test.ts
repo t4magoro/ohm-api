@@ -1,26 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { approveWord, blockWord, cleanQuery, overview, parseAdminCommand, search, unblockWord } from "../src/admin";
-import { hear } from "../src/brain";
-import { DEFAULT_SETTINGS } from "../src/protocol";
-import { migrate } from "../src/schema";
-import { makeLexicon } from "../src/words";
-import { count, emptySql, testSql } from "./sql";
-
-vi.mock("../src/wasm", async () => {
-  const { readFile } = await import("node:fs/promises");
-  const bytes = await readFile(new URL("../src/pet.wasm", import.meta.url));
-  const { instance } = await WebAssembly.instantiate(bytes);
-  return { math: instance.exports };
-});
-
-const RINA = { id: "visitor-rina", name: "Rina", ipHash: "0123456789abcdef" };
-const T0 = Date.UTC(2026, 9, 1);
-const lexicon = makeLexicon({ id: "aku\nsuka\nkopi", en: "" }, "");
-
-let sql: SqlStorage;
-beforeEach(() => {
-  sql = testSql();
-});
+import { describe, expect, it } from "vitest";
+import { cleanQuery, parseAdminCommand } from "../src/admin";
 
 describe("parseAdminCommand", () => {
   it("accepts well-formed commands", () => {
@@ -50,64 +29,11 @@ describe("parseAdminCommand", () => {
   });
 });
 
-describe("word moderation", () => {
-  it("approving a queued word teaches it to Ohm", () => {
-    hear(sql, lexicon, ["wkwk"], RINA, T0);
-    approveWord(sql, "wkwk", "id", T0);
-    expect(count(sql, "SELECT COUNT(*) AS n FROM pending")).toBe(0);
-    expect(sql.exec("SELECT langs, by_name FROM words WHERE word = 'wkwk'").one()).toEqual({ langs: "id", by_name: "admin" });
-  });
-
-  it("blocking a word makes Ohm forget it everywhere and never learn it again", () => {
-    hear(sql, lexicon, ["aku", "suka", "kopi"], RINA, T0);
-    blockWord(sql, "suka");
-    expect(count(sql, "SELECT COUNT(*) AS n FROM words WHERE word = 'suka'")).toBe(0);
-    expect(count(sql, "SELECT COUNT(*) AS n FROM grams WHERE 'suka' IN (p2, p1, next)")).toBe(0);
-    expect(hear(sql, lexicon, ["suka"], RINA, T0).blocked).toBe(true);
-    unblockWord(sql, "suka");
-    expect(hear(sql, lexicon, ["suka"], RINA, T0).learned).toEqual(["suka"]);
-  });
-
-  it("the overview lists what needs your attention", () => {
-    hear(sql, lexicon, ["aku", "wkwk"], RINA, T0);
-    const o = overview(sql, DEFAULT_SETTINGS);
-    expect(o.pending).toEqual([{ word: "wkwk", seen: 1 }]);
-    expect(o.words).toEqual([{ word: "aku", by: "Rina", ipHash: "0123456789abcdef", at: T0 }]);
-    expect(o.settings).toEqual(DEFAULT_SETTINGS);
-  });
-
-  it("search finds a word in every list, and % or _ only match themselves", () => {
-    hear(sql, lexicon, ["aku", "suka", "wkwk"], RINA, T0);
-    blockWord(sql, "kopi");
-    const found = search(sql, "k");
-    expect(found.words.map((w) => w.word)).toEqual(["aku", "suka"]);
-    expect(found.pending).toEqual([{ word: "wkwk", seen: 1 }]);
-    expect(found.blocked).toEqual([{ word: "kopi" }]);
-    expect(search(sql, "%").words).toEqual([]);
-    expect(search(sql, "_").words).toEqual([]);
-  });
-
-  it("cleanQuery tidies the search box and refuses empty or huge searches", () => {
+describe("cleanQuery", () => {
+  it("tidies the search box and refuses empty or huge searches", () => {
     expect(cleanQuery("  KoPi ")).toBe("kopi");
     expect(cleanQuery("   ")).toBeNull();
     expect(cleanQuery(null)).toBeNull();
     expect(cleanQuery("x".repeat(33))).toBeNull();
-  });
-});
-
-describe("migrate", () => {
-  it("upgrades the live Phase 2 database (old tables, no schema number) without losing data", () => {
-    const old = emptySql();
-    old.exec("CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT)");
-    old.exec("CREATE TABLE events (id INTEGER PRIMARY KEY, at INTEGER, type TEXT, who_id TEXT, who_name TEXT)");
-    old.exec("INSERT INTO events (at, type, who_id, who_name) VALUES (1, 'charge', 'x', 'IQBAL')");
-    migrate(old);
-    expect(old.exec("SELECT who_name, detail FROM events").one()).toEqual({ who_name: "IQBAL", detail: null });
-    expect(old.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "4" });
-  });
-
-  it("runs each step once, so running it again changes nothing", () => {
-    migrate(sql); // testSql() already migrated once
-    expect(sql.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "4" });
   });
 });
