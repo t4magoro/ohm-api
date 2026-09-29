@@ -1,35 +1,19 @@
 // Ohm's brain: a Markov chain. It counts which word follows which in what visitors type,
 // then talks by repeatedly picking a likely next word. It can only say words it has learned.
-// Its tables are created in schema.ts.
+// Its tables are created in schema.ts; which words are allowed is decided in words.ts.
 import type { Brain } from "./protocol";
 import { math } from "./wasm";
-import type { Lexicon } from "./words";
+import { hasBlocked, type Lexicon } from "./words";
 
 const START = "<s>";
 const END = "</s>";
-const MAX_WORDS = 20; // words read from one message
 const MAX_REPLY = 12; // words in one reply
 const MAX_WEIGHTS = 4096; // must match pet.cpp
 
 type Who = { id: string; name: string; ipHash: string };
 type Row = { next: string; count: number };
 
-/** "Aku  SUKA kopi!!" → ["aku", "suka", "kopi"]. Keeps letters plus inner ' and - (kupu-kupu, don't). */
-export const tokenize = (text: string) =>
-  text
-    .normalize("NFC")
-    .toLowerCase()
-    .replace(/[^\p{L}'-]+/gu, " ")
-    .split(" ")
-    .map((w) => w.replace(/^['-]+|['-]+$/g, ""))
-    .filter(Boolean)
-    .slice(0, MAX_WORDS);
-
 const exists = (sql: SqlStorage, query: string, word: string) => sql.exec(query, word).toArray().length > 0;
-
-/** True if any word is on a blocklist: the built-in one or the one you edit on the admin page. */
-export const hasBlocked = (sql: SqlStorage, lexicon: Lexicon, words: string[]) =>
-  words.some((w) => lexicon.isBlocked(w) || exists(sql, "SELECT 1 FROM blocked WHERE word = ?", w));
 
 /**
  * Ohm hears a message. Allowed new words join its vocabulary, unknown words wait in the
@@ -37,7 +21,6 @@ export const hasBlocked = (sql: SqlStorage, lexicon: Lexicon, words: string[]) =
  */
 export function hear(sql: SqlStorage, lexicon: Lexicon, words: string[], who: Who, now: number) {
   if (hasBlocked(sql, lexicon, words)) return { blocked: true, learned: [] as string[] };
-
 
   const learned: string[] = [];
   const pieces: string[][] = [[]];
