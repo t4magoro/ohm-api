@@ -14,6 +14,14 @@ describe("parseClientMessage", () => {
     expect(parseClientMessage('{"t":"report","lineId":7}')).toEqual({ t: "report", lineId: 7 });
   });
 
+  it("keeps a valid lastSeen and drops a broken one without refusing the hello", () => {
+    const hello = { t: "hello", id: "abc12345", name: "Rina" };
+    expect(parseClientMessage(JSON.stringify({ ...hello, lastSeen: 1790600000000 }))).toEqual({ ...hello, lastSeen: 1790600000000 });
+    for (const lastSeen of ["yesterday", -5, 1.5, null]) {
+      expect(parseClientMessage(JSON.stringify({ ...hello, lastSeen }))).toEqual(hello);
+    }
+  });
+
   it("rejects junk", () => {
     const junk = [
       "not json",

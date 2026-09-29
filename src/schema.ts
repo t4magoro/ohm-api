@@ -21,6 +21,16 @@ const STEPS: string[][] = [
     "ALTER TABLE lines ADD COLUMN ip_hash TEXT",
     "CREATE TABLE IF NOT EXISTS bans (ip_hash TEXT PRIMARY KEY, at INTEGER)",
   ],
+  // 4 (Phase 4): one row per hour for the Vitals charts. The indexes let the Vitals and
+  // "while you were away" queries read only the rows they need instead of whole tables
+  // (the free plan counts every row read). Each index costs one extra row write per insert.
+  [
+    "CREATE TABLE IF NOT EXISTS snapshots (at INTEGER PRIMARY KEY, charge REAL, mood REAL, vocab INTEGER, online INTEGER)",
+    "CREATE INDEX IF NOT EXISTS events_type_at ON events (type, at)",
+    "CREATE INDEX IF NOT EXISTS lines_at ON lines (at)",
+    "CREATE INDEX IF NOT EXISTS words_at ON words (at)",
+    "CREATE INDEX IF NOT EXISTS words_by ON words (by_id)",
+  ],
 ];
 
 export function migrate(sql: SqlStorage) {

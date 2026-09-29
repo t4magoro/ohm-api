@@ -85,11 +85,11 @@ describe("migrate", () => {
     old.exec("INSERT INTO events (at, type, who_id, who_name) VALUES (1, 'charge', 'x', 'IQBAL')");
     migrate(old);
     expect(old.exec("SELECT who_name, detail FROM events").one()).toEqual({ who_name: "IQBAL", detail: null });
-    expect(old.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "3" });
+    expect(old.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "4" });
   });
 
   it("runs each step once, so running it again changes nothing", () => {
     migrate(sql); // testSql() already migrated once
-    expect(sql.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "3" });
+    expect(sql.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "4" });
   });
 });
