@@ -119,7 +119,7 @@ export class Ohm extends DurableObject<Env> {
 
     const words = tokenize(text);
     if (hasBlocked(this.sql, lexicon, words)) {
-      return this.send(ws, { t: "error", msg: "Ohm covers its ears 🙉 That word isn't allowed" });
+      return this.send(ws, { t: "error", msg: "Ohm covers its ears. That word isn't allowed" });
     }
 
     // Answer first, learn second. The other way round, a sentence full of new words comes

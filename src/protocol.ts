@@ -29,9 +29,9 @@ export type Brain = { vocab: number; level: number; langs: { id: LangStat; en: L
 
 /** Goals everyone works on together. Reaching one gives Ohm a new part on its sprite, for good. */
 export const MILESTONES = [
-  { id: "antenna", counts: "words", goal: 100, goalText: "Teach Ohm 100 words", part: "a tall antenna 📡" },
-  { id: "hat", counts: "days", goal: 7, goalText: "Keep Ohm alive for 7 days in one life", part: "a top hat 🎩" },
-  { id: "jetpack", counts: "charges", goal: 1000, goalText: "Charge Ohm 1,000 times", part: "a jetpack 🚀" },
+  { id: "antenna", counts: "words", goal: 100, goalText: "Teach Ohm 100 words", part: "a tall antenna" },
+  { id: "hat", counts: "days", goal: 7, goalText: "Keep Ohm alive for 7 days in one life", part: "a top hat" },
+  { id: "jetpack", counts: "charges", goal: 1000, goalText: "Charge Ohm 1,000 times", part: "a jetpack" },
 ] as const;
 export type MilestoneId = (typeof MILESTONES)[number]["id"];
 export type Counts = (typeof MILESTONES)[number]["counts"];
