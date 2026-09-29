@@ -1,7 +1,10 @@
 export { Ohm } from "./ohm";
 
-// Only these websites may call the API from a browser.
+// Only these websites may open the WebSocket or use the admin API from a browser.
 const ALLOWED_ORIGINS = ["https://t4magoro.github.io", "http://localhost:3001"];
+// /state and /vitals are public, read-only numbers (curl can read them anyway), so any page may
+// fetch them: your portfolio card, and its dev server on localhost:3000.
+const PUBLIC = { "Access-Control-Allow-Origin": "*" };
 
 /** Compares in constant time, so how long it takes doesn't reveal how much of a guess was right. */
 function tokenOk(given: string, expected: string | undefined) {
@@ -27,10 +30,10 @@ export default {
       return ohm.fetch(request);
     }
     if (url.pathname === "/state") {
-      return Response.json(await ohm.getState(), { headers: cors });
+      return Response.json(await ohm.getState(), { headers: PUBLIC });
     }
     if (url.pathname === "/vitals") {
-      return Response.json(await ohm.getVitals(), { headers: cors });
+      return Response.json(await ohm.getVitals(), { headers: PUBLIC });
     }
 
     if (url.pathname.startsWith("/admin/")) {
