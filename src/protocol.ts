@@ -12,6 +12,7 @@ export type Pet = {
   offAt: number | null; // when it last shut down
   life: number; // 1 for Ohm's first life, 2 after the first reboot…
   recordMs: number; // longest life so far
+  charges: number; // times charged, over all lives (for the jetpack milestone)
 };
 
 /** Bandung right now. Heat drains the battery, rain drains the mood, night halves both. */
@@ -26,19 +27,28 @@ export const HOURS_RANGE = [1, 168] as const; // one hour to one week
 export type LangStat = { words: number; level: number };
 export type Brain = { vocab: number; level: number; langs: { id: LangStat; en: LangStat } };
 
+/** Goals everyone works on together. Reaching one gives Ohm a new part on its sprite, for good. */
+export const MILESTONES = [
+  { id: "antenna", counts: "words", goal: 100, goalText: "Teach Ohm 100 words", part: "a tall antenna 📡" },
+  { id: "hat", counts: "days", goal: 7, goalText: "Keep Ohm alive for 7 days in one life", part: "a top hat 🎩" },
+  { id: "jetpack", counts: "charges", goal: 1000, goalText: "Charge Ohm 1,000 times", part: "a jetpack 🚀" },
+] as const;
+export type MilestoneId = (typeof MILESTONES)[number]["id"];
+export type Counts = (typeof MILESTONES)[number]["counts"];
+
 /** Something Ohm said, in reply to a visitor. Visitors' own messages are never shown to others. */
 export type Line = { id: number; at: number; text: string; to: string };
 
 export type FeedEvent = {
   id: number;
   at: number;
-  type: "charge" | "play" | "reboot" | "shutdown" | "taught";
+  type: "charge" | "play" | "reboot" | "shutdown" | "taught" | "unlocked";
   name: string;
-  detail: string | null; // the words, for "taught"
+  detail: string | null; // the words for "taught", the milestone id for "unlocked"
 };
 
 export type ClientMsg =
-  | { t: "hello"; id: string; name: string }
+  | { t: "hello"; id: string; name: string; lastSeen?: number } // lastSeen: your last visit, for "while you were away"
   | { t: "charge" }
   | { t: "play" }
   | { t: "reboot" }
@@ -46,15 +56,33 @@ export type ClientMsg =
   | { t: "report"; lineId: number };
 
 export type ServerMsg =
-  | { t: "state"; pet: Pet; weather: Weather; brain: Brain; now: number }
+  | { t: "state"; pet: Pet; weather: Weather; brain: Brain; unlocked: MilestoneId[]; now: number }
   | { t: "online"; online: number }
   | { t: "feed"; events: FeedEvent[] }
   | { t: "event"; e: FeedEvent }
   | { t: "lines"; lines: Line[] }
   | { t: "line"; line: Line }
   | { t: "unsay"; id: number } // you deleted one of Ohm's lines on the admin page
+  | { t: "away"; learned: number; shutdowns: number; said: number } // since your last visit (said: ever)
   | { t: "notice"; msg: string }
   | { t: "error"; msg: string };
+
+/** One hourly reading for the Vitals charts. `at` is the start of the hour. */
+export type Snapshot = { at: number; charge: number; mood: number; vocab: number; online: number };
+
+/** How far a milestone is. `etaDays` is at this week's pace: null once unlocked, or with no progress. */
+export type MilestoneProgress = { id: MilestoneId; value: number; done: boolean; etaDays: number | null };
+
+/** Everything the Vitals page shows (GET /vitals). */
+export type Vitals = {
+  snapshots: Snapshot[]; // hourly, last 7 days, oldest first
+  hours: number[]; // 24 numbers: actions and chats in each hour of the day, Bandung time, last 7 days
+  growth: { day: string; words: number }[]; // words learned per day ("2026-09-29", Bandung date), oldest first
+  topWords: { word: string; uses: number; said: number; by: string }[];
+  milestones: MilestoneProgress[];
+  brain: Brain;
+  now: number;
+};
 
 /** What the admin page lists. `ipHash` is a salted hash: Ohm never stores a real IP address. */
 export type AdminOverview = {

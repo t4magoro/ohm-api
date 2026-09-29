@@ -15,7 +15,7 @@ const rates = ({ weather: w, settings: s }: Conditions) => ({
   mood: math.mood_rate(s.moodHours, w.raining ? 1 : 0, w.isDay ? 1 : 0),
 });
 
-const valueNow = (s: Stat, now: number) => math.value_now(s.v, s.at, s.rate, now);
+export const valueNow = (s: Stat, now: number) => math.value_now(s.v, s.at, s.rate, now);
 
 /** Keeps the value reached so far, then drains at `rate` from `now` on. */
 const checkpoint = (s: Stat, now: number, rate: number): Stat => ({ v: valueNow(s, now), at: now, rate });
@@ -30,6 +30,7 @@ export function newPet(now: number, c: Conditions): Pet {
     offAt: null,
     life: 1,
     recordMs: 0,
+    charges: 0,
   };
 }
 
@@ -75,5 +76,6 @@ export function act(pet: Pet, action: "charge" | "play" | "chat" | "reboot", now
   const key = action === "charge" ? "charge" : "mood";
   const s = pet[key];
   pet[key] = { v: Math.min(MAX, valueNow(s, now) + GAIN[action]), at: now, rate: s.rate };
+  if (action === "charge") pet.charges += 1;
   return null;
 }

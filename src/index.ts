@@ -29,6 +29,9 @@ export default {
     if (url.pathname === "/state") {
       return Response.json(await ohm.getState(), { headers: cors });
     }
+    if (url.pathname === "/vitals") {
+      return Response.json(await ohm.getVitals(), { headers: cors });
+    }
 
     if (url.pathname.startsWith("/admin/")) {
       const headers = {

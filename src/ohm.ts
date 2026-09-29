@@ -10,18 +10,22 @@ import {
   type Brain,
   type FeedEvent,
   type Line,
+  type MilestoneId,
   type Pet,
   type ServerMsg,
   type Settings,
+  type Vitals,
   type Weather,
 } from "./protocol";
 import { migrate } from "./schema";
+import { away, reached, snapshot, standing, vitals } from "./vitals";
 import { DEFAULT_WEATHER, fetchBandungWeather, parseWeather } from "./weather";
 
 const MAX_SOCKETS_PER_IP = 5;
 const FEED_SIZE = 30;
 const LINES_SHOWN = 20;
 const WEATHER_EVERY = 15 * 60_000; // Open-Meteo refreshes every 15 minutes
+const VITALS_EVERY = 5 * 60_000; // GET /vitals is recalculated at most this often
 
 /** What Ohm remembers about each open WebSocket. Stored on the socket, so it survives hibernation. */
 type Visitor = { ipHash: string; id: string; name: string; helloAt: number };
@@ -33,6 +37,7 @@ export class Ohm extends DurableObject<Env> {
   private careAllowed = cooldown(3_000);
   private sayAllowed = cooldown(10_000);
   private reportAllowed = cooldown(30_000);
+  private vitalsCache: Vitals | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -79,6 +84,10 @@ export class Ohm extends DurableObject<Env> {
       this.send(ws, this.stateMsg(this.load(now), now));
       this.send(ws, { t: "feed", events: this.feed() });
       this.send(ws, { t: "lines", lines: this.lines() });
+      if (msg.lastSeen) {
+        const summary = away(this.sql, msg.id, msg.lastSeen);
+        if (summary.learned > 0 || summary.shutdowns > 0) this.send(ws, { t: "away", ...summary });
+      }
       this.broadcast({ t: "online", online: this.online() });
       return;
     }
@@ -93,6 +102,7 @@ export class Ohm extends DurableObject<Env> {
     if (problem) return this.send(ws, { t: "error", msg: problem });
     this.save(pet);
     this.broadcast({ t: "event", e: this.log(now, msg.t, me.id, me.name) });
+    this.unlock(pet, now);
     this.broadcast(this.stateMsg(pet, now));
   }
 
@@ -110,6 +120,7 @@ export class Ohm extends DurableObject<Env> {
     if (heard.learned.length > 0) {
       this.kvSet("brain", brainStats(this.sql));
       this.broadcast({ t: "event", e: this.log(now, "taught", me.id, me.name, heard.learned.join(", ")) });
+      this.unlock(pet, now);
     }
 
     let answer: string;
@@ -156,7 +167,7 @@ export class Ohm extends DurableObject<Env> {
     await this.webSocketClose(ws);
   }
 
-  /** Every 15 minutes: read Bandung's weather, change the drain speed, and notice a shutdown. */
+  /** Every 15 minutes: read Bandung's weather, change the drain speed, notice a shutdown, take the hourly snapshot. */
   async alarm() {
     await this.ctx.storage.setAlarm(Date.now() + WEATHER_EVERY); // schedule the next one first, so the chain never breaks
     try {
@@ -168,13 +179,27 @@ export class Ohm extends DurableObject<Env> {
     } catch (err) {
       console.log("Weather update failed, keeping the last reading:", err);
     }
-    this.load(Date.now()); // notices a shutdown even when nobody is online
+    const now = Date.now();
+    const pet = this.load(now); // notices a shutdown even when nobody is online
+    snapshot(this.sql, pet, this.brain().vocab, this.online(), now);
+    if (this.unlock(pet, now)) this.broadcast(this.stateMsg(pet, now)); // "alive 7 days" grows with time alone
   }
 
   /** For GET /state: the smoke check now, your portfolio card later. */
   async getState() {
     const now = Date.now();
-    return { pet: this.load(now), weather: this.weather(), brain: this.brain(), online: this.online(), now };
+    const pet = this.load(now);
+    return { pet, weather: this.weather(), brain: this.brain(), unlocked: this.unlocked(), online: this.online(), now };
+  }
+
+  /** For GET /vitals. Anyone can call it and it reads whole tables, so it's recalculated at most every 5 minutes. */
+  async getVitals(): Promise<Vitals> {
+    const now = Date.now();
+    if (!this.vitalsCache || now - this.vitalsCache.now >= VITALS_EVERY) {
+      const s = standing(this.load(now), this.brain().vocab, now);
+      this.vitalsCache = vitals(this.sql, s, this.unlocked(), this.brain(), now);
+    }
+    return this.vitalsCache;
   }
 
   /** For the admin page. The Worker has already checked your token. */
@@ -250,11 +275,31 @@ export class Ohm extends DurableObject<Env> {
     return brain;
   }
 
+  /** The parts Ohm has earned. Once unlocked, a milestone stays unlocked. */
+  private unlocked(): MilestoneId[] {
+    return this.kvGet<MilestoneId[]>("unlocked") ?? [];
+  }
+
+  /** Unlocks the milestones Ohm just reached and tells the feed. Returns true if there were any. */
+  private unlock(pet: Pet, now: number) {
+    const unlocked = this.unlocked();
+    const fresh = reached(standing(pet, this.brain().vocab, now), unlocked);
+    if (fresh.length === 0) return false;
+    this.kvSet("unlocked", [...unlocked, ...fresh]);
+    for (const id of fresh) this.broadcast({ t: "event", e: this.log(now, "unlocked", "", "Ohm", id) });
+    return true;
+  }
+
   /** Reads Ohm from SQLite and applies the drain up to `now`. */
   private load(now: number): Pet {
     let pet = this.kvGet<Pet>("pet");
     if (!pet) {
       pet = newPet(now, this.conditions());
+      this.save(pet);
+    }
+    if (pet.charges === undefined) {
+      // Ohm was saved before Phase 4: count the charges so far, once.
+      pet.charges = this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM events WHERE type = 'charge'").one().n;
       this.save(pet);
     }
     if (catchUp(pet, now)) {
@@ -270,7 +315,7 @@ export class Ohm extends DurableObject<Env> {
   }
 
   private stateMsg(pet: Pet, now: number): ServerMsg {
-    return { t: "state", pet, weather: this.weather(), brain: this.brain(), now };
+    return { t: "state", pet, weather: this.weather(), brain: this.brain(), unlocked: this.unlocked(), now };
   }
 
   private kvGet<T>(key: string): T | undefined {
