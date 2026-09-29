@@ -40,7 +40,7 @@ describe("pet rules", () => {
     act(pet, "charge", T0 + 4 * HOUR, DAY);
     expect(pet.charge.v).toBe(100);
     expect(pet.charge.v).toBe(100);
-    expect(pet.charges).toBe(2); // counted for the jetpack milestone, even when the bar is ful
+    expect(pet.charges).toBe(2); // counted for the jetpack milestone, even when the bar is full
   });
 
   it("can't be charged while off, and a reboot starts a new life", () => {
