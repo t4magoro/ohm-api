@@ -8,12 +8,14 @@ import {
   fileReport,
   isBanned,
   overview,
+  resetBrain,
   search,
   unban,
   unblockWord,
   unsay,
 } from "../src/moderation";
 import { DEFAULT_SETTINGS } from "../src/protocol";
+import type { Situation } from "../src/situation";
 import { makeLexicon } from "../src/words";
 import { count, testSql } from "./sql";
 
@@ -27,6 +29,7 @@ vi.mock("../src/wasm", async () => {
 const RINA = { id: "visitor-rina", name: "Rina", ipHash: "0123456789abcdef" };
 const T0 = Date.UTC(2026, 9, 1);
 const lexicon = makeLexicon({ id: "aku\nsuka\nkopi", en: "" }, "");
+const DRY: Situation[] = ["siang"];
 
 let sql: SqlStorage;
 beforeEach(() => {
@@ -35,24 +38,25 @@ beforeEach(() => {
 
 describe("word moderation", () => {
   it("approving a queued word teaches it to Ohm", () => {
-    hear(sql, lexicon, ["wkwk"], RINA, T0);
+    hear(sql, lexicon, ["wkwk"], RINA, T0, DRY);
     approveWord(sql, "wkwk", "id", T0);
     expect(count(sql, "SELECT COUNT(*) AS n FROM pending")).toBe(0);
     expect(sql.exec("SELECT langs, by_name FROM words WHERE word = 'wkwk'").one()).toEqual({ langs: "id", by_name: "admin" });
   });
 
   it("blocking a word makes Ohm forget it everywhere and never learn it again", () => {
-    hear(sql, lexicon, ["aku", "suka", "kopi"], RINA, T0);
+    hear(sql, lexicon, ["aku", "suka", "kopi"], RINA, T0, DRY);
     blockWord(sql, "suka");
     expect(count(sql, "SELECT COUNT(*) AS n FROM words WHERE word = 'suka'")).toBe(0);
     expect(count(sql, "SELECT COUNT(*) AS n FROM grams WHERE 'suka' IN (p2, p1, next)")).toBe(0);
-    expect(hear(sql, lexicon, ["suka"], RINA, T0).blocked).toBe(true);
+    expect(count(sql, "SELECT COUNT(*) AS n FROM word_ctx WHERE word = 'suka'")).toBe(0);
+    expect(hear(sql, lexicon, ["suka"], RINA, T0, DRY).blocked).toBe(true);
     unblockWord(sql, "suka");
-    expect(hear(sql, lexicon, ["suka"], RINA, T0).learned).toEqual(["suka"]);
+    expect(hear(sql, lexicon, ["suka"], RINA, T0, DRY).learned).toEqual(["suka"]);
   });
 
   it("the overview lists what needs your attention", () => {
-    hear(sql, lexicon, ["aku", "wkwk"], RINA, T0);
+    hear(sql, lexicon, ["aku", "wkwk"], RINA, T0, DRY);
     const o = overview(sql, DEFAULT_SETTINGS);
     expect(o.pending).toEqual([{ word: "wkwk", seen: 1 }]);
     expect(o.words).toEqual([{ word: "aku", by: "Rina", ipHash: "0123456789abcdef", at: T0 }]);
@@ -60,7 +64,7 @@ describe("word moderation", () => {
   });
 
   it("search finds a word in every list, and % or _ only match themselves", () => {
-    hear(sql, lexicon, ["aku", "suka", "wkwk"], RINA, T0);
+    hear(sql, lexicon, ["aku", "suka", "wkwk"], RINA, T0, DRY);
     blockWord(sql, "kopi");
     const found = search(sql, "k");
     expect(found.words.map((w) => w.word)).toEqual(["aku", "suka"]);
@@ -68,6 +72,24 @@ describe("word moderation", () => {
     expect(found.blocked).toEqual([{ word: "kopi" }]);
     expect(search(sql, "%").words).toEqual([]);
     expect(search(sql, "_").words).toEqual([]);
+  });
+});
+
+describe("reset", () => {
+  it("wipes everything Ohm learned and keeps moderation and history", () => {
+    hear(sql, lexicon, ["aku", "suka", "wkwk"], RINA, T0, DRY);
+    blockWord(sql, "kopi");
+    ban(sql, RINA.ipHash, T0);
+    sql.exec("INSERT INTO lines (at, text, to_name, ip_hash) VALUES (?, 'aku suka', 'Rina', ?)", T0, RINA.ipHash);
+    resetBrain(sql);
+    for (const table of ["words", "pending", "grams", "word_ctx", "links"]) {
+      expect(count(sql, `SELECT COUNT(*) AS n FROM ${table}`)).toBe(0);
+    }
+    expect(count(sql, "SELECT COUNT(*) AS n FROM kv WHERE key IN ('brain', 'mind')")).toBe(0);
+    expect(count(sql, "SELECT COUNT(*) AS n FROM blocked")).toBe(1);
+    expect(isBanned(sql, RINA.ipHash)).toBe(true);
+    expect(count(sql, "SELECT COUNT(*) AS n FROM lines")).toBe(1);
+    expect(hear(sql, lexicon, ["aku"], RINA, T0, DRY).learned).toEqual(["aku"]); // learns again from zero
   });
 });
 

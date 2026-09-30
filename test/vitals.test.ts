@@ -15,7 +15,12 @@ const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const T0 = Date.UTC(2026, 9, 1); // 07:00 in Bandung
 const SUNNY = { weather: { tempC: 27, raining: false, isDay: true }, settings: DEFAULT_SETTINGS };
-const BRAIN = { vocab: 0, level: 1, langs: { id: { words: 0, level: 0 }, en: { words: 0, level: 0 } } };
+const BRAIN = {
+  vocab: 0,
+  level: 1,
+  langs: { id: { words: 0, level: 0 }, en: { words: 0, level: 0 } },
+  skills: { words: 0, sentences: 0, context: 0, expression: 0 },
+};
 
 let sql: SqlStorage;
 beforeEach(() => {
@@ -37,12 +42,12 @@ const word = (word: string, at: number, said = 0, uses = 1, by = "visitor-rina")
 describe("snapshot", () => {
   it("saves one row per hour, stamped with the start of the hour", () => {
     const pet = newPet(T0, SUNNY);
-    snapshot(sql, pet, 3, 2, T0 + 10 * 60_000);
-    snapshot(sql, pet, 4, 9, T0 + 25 * 60_000); // same hour: ignored
-    snapshot(sql, pet, 5, 1, T0 + HOUR + 60_000);
-    expect(sql.exec("SELECT at, vocab, online FROM snapshots ORDER BY at").toArray()).toEqual([
-      { at: T0, vocab: 3, online: 2 },
-      { at: T0 + HOUR, vocab: 5, online: 1 },
+        snapshot(sql, pet, { ...BRAIN, vocab: 3, skills: { ...BRAIN.skills, words: 0.5 } }, 2, T0 + 10 * 60_000);
+    snapshot(sql, pet, { ...BRAIN, vocab: 4 }, 9, T0 + 25 * 60_000); // same hour: ignored
+    snapshot(sql, pet, { ...BRAIN, vocab: 5 }, 1, T0 + HOUR + 60_000);
+    expect(sql.exec("SELECT at, vocab, online, skill_words FROM snapshots ORDER BY at").toArray()).toEqual([
+      { at: T0, vocab: 3, online: 2, skill_words: 0.5 },
+      { at: T0 + HOUR, vocab: 5, online: 1, skill_words: 0 },
     ]);
     const { charge } = sql.exec<{ charge: number }>("SELECT charge FROM snapshots WHERE at = ?", T0 + HOUR).one();
     expect(charge).toBeCloseTo(100 - 5 * (61 / 60)); // the value at that moment, not at the start of the hour

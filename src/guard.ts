@@ -15,7 +15,7 @@ export function parseClientMessage(raw: string | ArrayBuffer): ClientMsg | null 
     return null;
   }
   if (typeof m !== "object" || m === null) return null;
-  const { t, id, name, text, lineId, lastSeen } = m as Record<string, unknown>;
+  const { t, id, name, text, lineId, lastSeen, pat } = m as Record<string, unknown>;
   if (t === "charge" || t === "play" || t === "reboot") return { t };
   if (t === "hello" && typeof id === "string" && /^[\w-]{8,64}$/.test(id) && typeof name === "string") {
     const clean = cleanName(name);
@@ -25,6 +25,7 @@ export function parseClientMessage(raw: string | ArrayBuffer): ClientMsg | null 
   }
   if (t === "say" && typeof text === "string" && text.trim() && text.length <= MAX_SAY) return { t, text };
   if (t === "report" && isPositive(lineId)) return { t, lineId };
+  if (t === "rate" && isPositive(lineId) && typeof pat === "boolean") return { t, lineId, pat };
   return null;
 }
 

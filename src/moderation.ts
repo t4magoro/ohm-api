@@ -20,10 +20,21 @@ export function blockWord(sql: SqlStorage, word: string) {
   sql.exec("DELETE FROM pending WHERE word = ?", word);
   sql.exec("DELETE FROM words WHERE word = ?", word);
   sql.exec("DELETE FROM grams WHERE p2 = ? OR p1 = ? OR next = ?", word, word, word);
+  sql.exec("DELETE FROM word_ctx WHERE word = ?", word);
+  sql.exec("DELETE FROM links WHERE word = ?", word);
 }
 
 export function unblockWord(sql: SqlStorage, word: string) {
   sql.exec("DELETE FROM blocked WHERE word = ?", word);
+}
+
+/**
+ * Ohm forgets everything he learned: words, the queue, patterns, situations, skills. What stays: the
+ * blocklist, bans, reports, his past lines, the feed, the Vitals history and unlocked milestones.
+ */
+export function resetBrain(sql: SqlStorage) {
+  for (const table of ["words", "pending", "grams", "word_ctx", "links"]) sql.exec(`DELETE FROM ${table}`);
+  sql.exec("DELETE FROM kv WHERE key IN ('brain', 'mind')");
 }
 
 /** Bans are kept by salted IP hash (see guard.ts), never by real IP address. */

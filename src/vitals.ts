@@ -21,14 +21,20 @@ const count = (sql: SqlStorage, query: string, ...params: (string | number)[]) =
   sql.exec<{ n: number }>(query, ...params).one().n;
 
 /** Saves Ohm's stats once per hour. The 15-minute alarm calls this; only the first call in each hour writes. */
-export function snapshot(sql: SqlStorage, pet: Pet, vocab: number, online: number, now: number) {
+export function snapshot(sql: SqlStorage, pet: Pet, brain: Brain, online: number, now: number) {
+  const { words, sentences, context, expression } = brain.skills;
   sql.exec(
-    "INSERT INTO snapshots (at, charge, mood, vocab, online) VALUES (?, ?, ?, ?, ?) ON CONFLICT (at) DO NOTHING",
+    `INSERT INTO snapshots (at, charge, mood, vocab, online, skill_words, skill_sentences, skill_context, skill_expression)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (at) DO NOTHING`,
     now - (now % HOUR),
     valueNow(pet.charge, now),
     valueNow(pet.mood, now),
-    vocab,
+    brain.vocab,
     online,
+    words,
+    sentences,
+    context,
+    expression,
   );
 }
 

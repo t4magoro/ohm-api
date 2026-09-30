@@ -9,7 +9,8 @@ export type AdminCommand =
   | { do: "block" | "unblock"; word: string }
   | { do: "ban" | "unban"; ipHash: string }
   | { do: "dismiss" | "unsay"; id: number }
-  | { do: "settings"; settings: Settings };
+  | { do: "settings"; settings: Settings }
+  | { do: "reset" };
 
 const isWord = (w: unknown): w is string => typeof w === "string" && tokenize(w)[0] === w;
 const isHours = (h: unknown): h is number =>
@@ -34,6 +35,8 @@ export function parseAdminCommand(action: string, body: unknown): AdminCommand |
       return isHours(b.chargeHours) && isHours(b.moodHours)
         ? { do: action, settings: { chargeHours: b.chargeHours, moodHours: b.moodHours } }
         : null;
+    case "reset": // wipes Ohm's brain, so the page has to send the word too
+      return b.confirm === "RESET" ? { do: action } : null;        
     default:
       return null;
   }

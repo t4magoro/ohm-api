@@ -9,6 +9,7 @@ describe("parseAdminCommand", () => {
       do: "settings",
       settings: { chargeHours: 24, moodHours: 12.5 },
     });
+    expect(parseAdminCommand("reset", { confirm: "RESET" })).toEqual({ do: "reset" });
   });
 
   it("rejects anything else", () => {
@@ -23,6 +24,8 @@ describe("parseAdminCommand", () => {
       ["settings", { chargeHours: 169, moodHours: 12 }],
       ["settings", { chargeHours: "24", moodHours: 12 }],
       ["settings", { chargeHours: Number.NaN, moodHours: 12 }],
+      ["reset", {}], // a reset needs the confirmation word
+      ["reset", { confirm: "reset" }],
       ["settings", null],
     ];
     for (const [action, body] of bad) expect(parseAdminCommand(action, body)).toBeNull();

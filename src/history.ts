@@ -46,6 +46,15 @@ export function saveLine(sql: SqlStorage, at: number, text: string, toName: stri
     .one();
 }
 
+/** A pat (true) or frown (false) on one of Ohm's lines. Only the visitor Ohm was answering may rate it, once. */
+export function markRated(sql: SqlStorage, lineId: number, ipHash: string, pat: boolean) {
+  return (
+    sql
+      .exec("UPDATE lines SET rated = ? WHERE id = ? AND ip_hash = ? AND rated IS NULL RETURNING id", Number(pat), lineId, ipHash)
+      .toArray().length > 0
+  );
+}
+
 /** Ohm's last lines, oldest first, for visitors who just arrived. */
 export function lines(sql: SqlStorage): Line[] {
   return sql

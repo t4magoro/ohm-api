@@ -1,7 +1,12 @@
-// Ohm's brain: a Markov chain. It counts which word follows which in what visitors type,
-// then talks by repeatedly picking a likely next word. It can only say words it has learned.
-// Its tables are created in schema.ts; which words are allowed is decided in words.ts.
+// Ohm's brain: a Markov chain. It counts which word follows which in what visitors type, then talks by
+// repeatedly picking a likely next word. It can only say words it has learned. There are no levels: Ohm
+// babbles where he has no evidence and speaks in sentences where he has. Every rule here was tested in
+// ohm-app/research/brain_sim.ipynb. Word + situation links are in grounding.ts, the skills in mind.ts,
+// the tables in schema.ts; which words are allowed is decided in words.ts.
+import { countSighting, linkOf, relink, situationWord } from "./grounding";
+import { bump, loadMind, saveMind, type Mind } from "./mind";
 import type { Brain } from "./protocol";
+import type { Situation } from "./situation";
 import { math } from "./wasm";
 import { hasBlocked, type Lexicon } from "./words";
 
@@ -9,35 +14,62 @@ const START = "<s>";
 const END = "</s>";
 const MAX_REPLY = 12; // words in one reply
 const MAX_WEIGHTS = 4096; // must match pet.cpp
+const SITUATION_CHANCE = 0.3; // personality: how often Ohm talks about his situation instead of your topic
 
 type Who = { id: string; name: string; ipHash: string };
 type Row = { next: string; count: number };
 
-const exists = (sql: SqlStorage, query: string, word: string) => sql.exec(query, word).toArray().length > 0;
+const exists = (sql: SqlStorage, query: string, ...params: string[]) => sql.exec(query, ...params).toArray().length > 0;
 
 /**
- * Ohm hears a message. Allowed new words join its vocabulary, unknown words wait in the
- * queue for your approval, and word triples are counted. One blocked word rejects everything.
+ * Ohm hears a message. First it's a test: before learning anything, the skills record how much of it he
+ * could have predicted. Then he learns: allowed new words join his vocabulary, unknown words wait in the
+ * queue for your approval, word triples and word + situation sightings are counted. One blocked word
+ * rejects everything. The visitor rule: a count only goes up when a different visitor than last time typed
+ * it. So a pattern with count 2+ was typed by at least two people, and one troll can't pump the counts.
  */
-export function hear(sql: SqlStorage, lexicon: Lexicon, words: string[], who: Who, now: number) {
+export function hear(sql: SqlStorage, lexicon: Lexicon, words: string[], who: Who, now: number, on: Situation[]) {
   if (hasBlocked(sql, lexicon, words)) return { blocked: true, learned: [] as string[] };
+  const mind = loadMind(sql);
 
+  // 1. The test, on what Ohm knew before this message.
+  const lastBy = new Map<string, string | null>(); // known word → the visitor who last counted for it
+  for (const w of new Set(words)) {
+    const row = sql.exec<{ seen_by: string | null }>("SELECT seen_by FROM words WHERE word = ?", w).toArray()[0];
+    if (row) lastBy.set(w, row.seen_by);
+  }
+  words.forEach((w, i) => {
+    bump(mind, "words", lastBy.has(w));
+    const prev = words[i - 1];
+    if (i > 0 && lastBy.has(prev) && lastBy.has(w)) {
+      bump(mind, "sentences", exists(sql, "SELECT 1 FROM grams WHERE p1 = ? AND next = ? LIMIT 1", prev, w));
+    }
+    const link = lastBy.has(w) ? linkOf(sql, w) : undefined;
+    if (link) bump(mind, "context", on.includes(link));
+  });
+
+  // 2. Learn words and triples.
   const learned: string[] = [];
+  const sighted: string[] = [];
   const pieces: string[][] = [[]];
   for (const w of words) {
-    if (exists(sql, "SELECT 1 FROM words WHERE word = ?", w)) {
-      sql.exec("UPDATE words SET uses = uses + 1 WHERE word = ?", w);
+    if (lastBy.has(w)) {
+      const counts = lastBy.get(w) !== who.ipHash;
+      sql.exec("UPDATE words SET uses = uses + 1, seen = seen + ?, seen_by = ? WHERE word = ?", counts ? 1 : 0, who.ipHash, w);
+      if (counts) sighted.push(w);
     } else if (lexicon.langsOf(w).length > 0) {
       sql.exec(
-        "INSERT INTO words (word, langs, by_id, by_name, ip_hash, at, uses) VALUES (?, ?, ?, ?, ?, ?, 1)",
+        "INSERT INTO words (word, langs, by_id, by_name, ip_hash, at, uses, seen, seen_by) VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?)",
         w,
         lexicon.langsOf(w).join(","),
         who.id,
         who.name,
         who.ipHash,
         now,
+        who.ipHash,
       );
       learned.push(w);
+      sighted.push(w);
     } else {
       sql.exec(
         "INSERT INTO pending (word, seen, first_seen) VALUES (?, 1, ?) ON CONFLICT (word) DO UPDATE SET seen = seen + 1",
@@ -47,21 +79,36 @@ export function hear(sql: SqlStorage, lexicon: Lexicon, words: string[], who: Wh
       pieces.push([]); // never link two words across one Ohm doesn't know
       continue;
     }
+    lastBy.set(w, who.ipHash);
     pieces.at(-1)!.push(w);
   }
-  for (const piece of pieces) if (piece.length > 0) learnTriples(sql, piece);
+  for (const piece of pieces) {
+    if (piece.length === 0) continue;
+    learnTriples(sql, piece, who.ipHash);
+    mind.tokens += piece.length;
+    mind.ends += 1;
+  }
+
+  // 3. Grounding: in which situations each word is said.
+  for (const w of sighted) countSighting(sql, mind, w, on);
+  for (const w of new Set(sighted)) relink(sql, mind, w);
+  saveMind(sql, mind);
   return { blocked: false, learned };
 }
 
-// "aku suka kopi" → (<s>,<s>)→aku, (<s>,aku)→suka, (aku,suka)→kopi, (suka,kopi)→</s>, each count + 1.
-function learnTriples(sql: SqlStorage, words: string[]) {
+// "aku suka kopi" → (<s>,<s>)→aku, (<s>,aku)→suka, (aku,suka)→kopi, (suka,kopi)→</s>.
+// Each count goes up by 1, unless the same visitor raised it last time (then nothing is written).
+function learnTriples(sql: SqlStorage, words: string[], ipHash: string) {
   const t = [START, START, ...words, END];
   for (let i = 2; i < t.length; i++) {
     sql.exec(
-      "INSERT INTO grams (p2, p1, next, count) VALUES (?, ?, ?, 1) ON CONFLICT (p2, p1, next) DO UPDATE SET count = count + 1",
+      `INSERT INTO grams (p2, p1, next, count, last_by) VALUES (?, ?, ?, 1, ?)
+       ON CONFLICT (p2, p1, next) DO UPDATE SET count = count + 1, last_by = excluded.last_by
+       WHERE grams.last_by IS NOT excluded.last_by`,
       t[i - 2],
       t[i - 1],
       t[i],
+      ipHash,
     );
   }
 }
@@ -75,57 +122,76 @@ export function pickWeighted<T extends { count: number }>(rows: T[], random: () 
   return i < 0 ? undefined : rows[i];
 }
 
-function nextWord(sql: SqlStorage, p2: string, p1: string, level: number, random: () => number) {
-  let rows: Row[] = [];
-  if (level >= 3) {
-    rows = sql
-      .exec<Row>(`SELECT next, count FROM grams WHERE p2 = ? AND p1 = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, p2, p1)
-      .toArray();
-  }
-  if (rows.length === 0) {
-    // Back off: look at the previous word only.
-    rows = sql
+/**
+ * Continues from one context, or returns undefined to back off to a shorter one (absolute discounting):
+ * every count loses 1, so a pattern with count 1 (one visitor) is never followed, and the context is
+ * followed with probability (total − number of rows) / total. The rest goes to the back-off.
+ */
+export function follow(rows: Row[], random: () => number): string | undefined {
+  const n = rows.reduce((sum, r) => sum + r.count, 0);
+  const kept = n - rows.length;
+  if (kept <= 0 || random() >= kept / n) return undefined;
+  return pickWeighted(rows.map((r) => ({ next: r.next, count: r.count - 1 })), random)?.next;
+}
+
+/** Any word Ohm knows. A random rowid reads 1 row, where ORDER BY random() would read the whole table. */
+function randomWord(sql: SqlStorage, random: () => number) {
+  const top = sql.exec<{ top: number | null }>("SELECT MAX(rowid) AS top FROM words").one().top ?? 0;
+  // ponytail: deleted (blocked) words leave gaps, so the word after a gap is picked a bit more often
+  return sql
+    .exec<{ word: string }>("SELECT word FROM words WHERE rowid >= ? ORDER BY rowid LIMIT 1", Math.floor(random() * top) + 1)
+    .one().word;
+}
+
+/** The next word: from the last two words, else the last word, else babble. */
+function nextWord(sql: SqlStorage, mind: Mind, p2: string, p1: string, random: () => number) {
+  const tri = sql
+    .exec<Row>(`SELECT next, count FROM grams WHERE p2 = ? AND p1 = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, p2, p1)
+    .toArray();
+  const bi = () =>
+    sql
       .exec<Row>(
         `SELECT next, SUM(count) AS count FROM grams WHERE p1 = ? GROUP BY next ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`,
         p1,
       )
       .toArray();
-  }
-  return pickWeighted(rows, random)?.next;
+  const word = follow(tri, random) ?? follow(bi(), random);
+  if (word) return { word, babble: false };
+  // Babble: stop as often as real sentences end, otherwise say any word Ohm knows.
+  const heard = mind.tokens + mind.ends;
+  return { word: random() < (heard ? mind.ends / heard : 1) ? END : randomWord(sql, random), babble: true };
 }
 
-/** Ohm answers, using only words it has learned. Returns null while it knows no words at all. */
-export function reply(sql: SqlStorage, heard: string[], random: () => number = Math.random): string | null {
-  const { vocab, level } = brainStats(sql);
-  if (vocab === 0) return null;
+/** Ohm answers, using only words he has learned. Returns null while he knows no words at all. */
+export function reply(sql: SqlStorage, heard: string[], on: Situation[], random: () => number = Math.random): string | null {
+  if (!exists(sql, "SELECT 1 FROM words LIMIT 1")) return null;
+  const mind = loadMind(sql);
+  // The topic: the rarest word Ohm knows in the message ("kopi", not "aku").
+  const marks = heard.map(() => "?").join(",");
+  const topic = heard.length
+    ? sql.exec<{ word: string }>(`SELECT word FROM words WHERE word IN (${marks}) ORDER BY uses LIMIT 1`, ...heard).toArray()[0]
+        ?.word
+    : undefined;
+  // Or, sometimes, what's on his mind: the word most clearly tied to his situation right now.
+  const felt = situationWord(sql, on);
+  const seed = felt && (!topic || random() < SITUATION_CHANCE) ? felt : (topic ?? randomWord(sql, random));
 
-  let words: string[];
-  if (level === 1) {
-    // Baby talk: 1–3 random words it knows.
-    const n = 1 + Math.floor(random() * 3);
-    words = sql.exec<{ word: string }>("SELECT word FROM words ORDER BY random() LIMIT ?", n).toArray().map((r) => r.word);
-  } else {
-    // Start from the rarest word Ohm knows in the message: it's usually the topic.
-    const marks = heard.map(() => "?").join(",");
-    const known = heard.length
-      ? sql.exec<{ word: string }>(`SELECT word FROM words WHERE word IN (${marks}) ORDER BY uses LIMIT 1`, ...heard).toArray()
-      : [];
-    const seed = known[0]?.word ?? sql.exec<{ word: string }>("SELECT word FROM words ORDER BY random() LIMIT 1").one().word;
-    words = [seed];
-    let [p2, p1] = [START, seed];
-    while (words.length < MAX_REPLY) {
-      const w = nextWord(sql, p2, p1, level, random);
-      if (!w || w === END) break;
-      words.push(w);
-      [p2, p1] = [p1, w];
-    }
+  const words = [seed];
+  let babbleOnly = true;
+  let [p2, p1] = [START, seed];
+  while (words.length < MAX_REPLY) {
+    const { word, babble } = nextWord(sql, mind, p2, p1, random);
+    babbleOnly &&= babble;
+    if (word === END) break;
+    words.push(word);
+    [p2, p1] = [p1, word];
   }
   for (const w of new Set(words)) sql.exec("UPDATE words SET said = said + 1 WHERE word = ?", w);
-  return level === 1 ? `${words.join(" ")} beep` : words.join(" ");
+  return babbleOnly ? `${words.join(" ")} beep` : words.join(" ");
 }
 
-/** Vocabulary size and levels, for the Spellbook. */
-export function brainStats(sql: SqlStorage): Brain {
+/** Vocabulary size and the old step levels, for the Spellbook. The site shows these until it shows the skills. */
+export function brainStats(sql: SqlStorage): Omit<Brain, "skills"> {
   const row = sql
     .exec<{ vocab: number; id: number | null; en: number | null }>(
       "SELECT COUNT(*) AS vocab, SUM(langs LIKE '%id%') AS id, SUM(langs LIKE '%en%') AS en FROM words",
