@@ -182,8 +182,7 @@ describe("brainStats", () => {
     hear(sql, lexicon, ["aku", "suka", "kopi", "i", "like"], RINA, T0, DRY);
     expect(brainStats(sql)).toEqual({
       vocab: 5,
-      level: 1,
-      langs: { id: { words: 3, level: 0 }, en: { words: 3, level: 0 } }, // "kopi" is in both lists
+      langs: { id: { words: 3 }, en: { words: 3 } }, // "kopi" is in both lists
     });
   });
 });

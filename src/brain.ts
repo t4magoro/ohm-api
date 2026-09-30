@@ -190,17 +190,12 @@ export function reply(sql: SqlStorage, heard: string[], on: Situation[], random:
   return babbleOnly ? `${words.join(" ")} beep` : words.join(" ");
 }
 
-/** Vocabulary size and the old step levels, for the Spellbook. The site shows these until it shows the skills. */
+/** Vocabulary size and words per language, for the Spellbook. */
 export function brainStats(sql: SqlStorage): Omit<Brain, "skills"> {
   const row = sql
     .exec<{ vocab: number; id: number | null; en: number | null }>(
       "SELECT COUNT(*) AS vocab, SUM(langs LIKE '%id%') AS id, SUM(langs LIKE '%en%') AS en FROM words",
     )
     .one();
-  const lang = (words: number) => ({ words, level: math.lang_level(words) });
-  return {
-    vocab: row.vocab,
-    level: math.brain_level(row.vocab),
-    langs: { id: lang(row.id ?? 0), en: lang(row.en ?? 0) },
-  };
+    return { vocab: row.vocab, langs: { id: { words: row.id ?? 0 }, en: { words: row.en ?? 0 } } };
 }
