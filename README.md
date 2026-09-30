@@ -1,5 +1,4 @@
 # ohm-api
-
 The backend of **Ohm, the internet's robot pet**: one pixel robot shared by everyone online.
 Visitors charge it, play with it, reboot it, and teach it to talk.
 
