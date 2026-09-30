@@ -26,6 +26,9 @@ export const HOURS_RANGE = [1, 168] as const; // one hour to one week
 /** How well Ohm does, 0 to 1. Measured on every message before he learns from it. */
 export type Skills = { words: number; sentences: number; context: number; expression: number };
 
+/** What's happening around Ohm (situation.ts): weather, Bandung's part of the day, low stats, what a visitor just did. */
+export type Care = "charge" | "play" | "reboot";
+export type Situation = "rain" | "hot" | "pagi" | "siang" | "sore" | "malam" | "battery_low" | "mood_low" | Care;
 /** What Ohm knows, for the Spellbook. The step levels come from pet.cpp; they stay until the site shows `skills`. */
 export type LangStat = { words: number; level: number };
 export type Brain = { vocab: number; level: number; langs: { id: LangStat; en: LangStat }; skills: Skills };
@@ -72,7 +75,8 @@ export type ServerMsg =
   | { t: "error"; msg: string };
 
 /** One hourly reading for the Vitals charts. `at` is the start of the hour. */
-export type Snapshot = { at: number; charge: number; mood: number; vocab: number; online: number };
+/** One hourly reading. `skills` is null in snapshots from before brain v2: not measured, which isn't the same as 0. */
+export type Snapshot = { at: number; charge: number; mood: number; vocab: number; online: number; skills: Skills | null };
 
 /** How far a milestone is. `etaDays` is at this week's pace: null once unlocked, or with no progress. */
 export type MilestoneProgress = { id: MilestoneId; value: number; done: boolean; etaDays: number | null };
@@ -83,6 +87,7 @@ export type Vitals = {
   hours: number[]; // 24 numbers: actions and chats in each hour of the day, Bandung time, last 7 days
   growth: { day: string; words: number }[]; // words learned per day ("2026-09-29", Bandung date), oldest first
   topWords: { word: string; uses: number; said: number; by: string }[];
+  links: { word: string; situation: Situation; lift: number }[]; // the strongest word → situation links (by G²), at most 12
   milestones: MilestoneProgress[];
   brain: Brain;
   now: number;

@@ -1,10 +1,8 @@
 // What's happening around Ohm right now, as simple on/off facts. Ohm learns which words people use
 // in which situation (brain.ts). The thresholds were tested in ohm-app/research/brain_sim.ipynb.
 import { valueNow } from "./pet";
-import type { Pet, Weather } from "./protocol";
-
-export type Care = "charge" | "play" | "reboot";
-export type Situation = "rain" | "hot" | "pagi" | "siang" | "sore" | "malam" | "battery_low" | "mood_low" | Care;
+import type { Care, Pet, Situation, Weather } from "./protocol";
+export type { Care, Situation }; // defined in protocol.ts: the site shows situations on the Vitals page
 
 const HOUR = 3_600_000;
 const BANDUNG = 7 * HOUR; // UTC+7 all year
