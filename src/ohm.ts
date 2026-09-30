@@ -14,6 +14,7 @@ import {
   fileReport,
   isBanned,
   overview,
+  resetBrain,
   search,
   unban,
   unblockWord,
@@ -247,6 +248,7 @@ export class Ohm extends DurableObject<Env> {
     else if (cmd.do === "unblock") unblockWord(this.sql, cmd.word);
     else if (cmd.do === "unban") unban(this.sql, cmd.ipHash);
     else if (cmd.do === "dismiss") dismissReport(this.sql, cmd.id);
+    else if (cmd.do === "reset") resetBrain(this.sql);
     else if (cmd.do === "ban") {
       ban(this.sql, cmd.ipHash, now);
       for (const ws of this.ctx.getWebSockets()) {
@@ -263,7 +265,7 @@ export class Ohm extends DurableObject<Env> {
       this.broadcast(this.stateMsg(pet, now)); // every open page switches speed right away
     }
 
-    if (cmd.do === "approve" || cmd.do === "block") {
+    if (cmd.do === "approve" || cmd.do === "block" || cmd.do === "reset") {
       kvSet(this.sql, "brain", brainStats(this.sql));
       this.broadcast(this.stateMsg(this.load(now), now)); // the Spellbook updates everywhere
     }

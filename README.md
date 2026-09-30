@@ -30,11 +30,16 @@ For local secrets, copy them into `.dev.vars` (gitignored): `ADMIN_TOKEN`, `IP_S
 
 ---
 
-## How Ohm learns to talk: the Markov chain
+## How Ohm learns to talk
 
-Ohm has no AI model. It **counts which word follows which** in what visitors type. To talk,
-it repeatedly picks a likely next word. It can only say words it has learned.
-The code is in `src/brain.ts` (learning and talking) and `cpp/pet.cpp` (the weighted random pick).
+Ohm has no AI model. It **counts which word follows which** in what visitors type, and **which words people
+use in which situation** (rain, night, charging…). To talk, it repeatedly picks a likely next word. It can only
+say words it has learned. There are **no levels**: Ohm babbles where it has no evidence and speaks in sentences
+where it has, from the very first message. Every rule below was tested before it was built, in a simulation with
+real Bandung weather: `ohm-app/research/brain_sim.ipynb`.
+
+The code: `src/brain.ts` (learning and talking), `src/grounding.ts` (word + situation links), `src/mind.ts`
+(skills and counters), `src/situation.ts` (what's happening now), `cpp/pet.cpp` (the weighted random pick).
 
 ### 1. From message to words
 
@@ -48,24 +53,25 @@ It reads at most 20 words:
 If **any** word is on a blocklist (the built-in one or the admin's), the whole message is rejected.
 Ohm doesn't reply, and it learns nothing.
 
-### 2. Answer first, then learn
+### 2. Answer first, then test, then learn
 
 ```mermaid
 flowchart LR
   A[visitor types] --> B[tokenize]
   B --> C{blocked word?}
   C -- yes --> X[rejected]
-  C -- no --> D[reply: uses only words Ohm already knew]
-  D --> E[hear: learn new words + count triples]
-  E --> F[broadcast Ohm's line to everyone]
+  C -- no --> D[reply: uses only what Ohm already knew]
+  D --> E[test: how much of this could Ohm predict?]
+  E --> F[learn: words, triples, situations]
+  F --> G[broadcast Ohm's line to everyone]
 ```
 
-Ohm replies **before** it learns from the message. Done the other way round, a sentence full of
-brand-new words would be the only path the chain knows. It would come straight back out, word for
-word, to everyone online. Visitors' messages are never stored as sentences or shown to others: only
-single words and triple counts are kept, and only Ohm's replies are broadcast.
+Ohm replies **before** it learns from the message. Done the other way round, a sentence full of brand-new
+words would be the only path the chain knows, and it would come straight back out to everyone online.
+Visitors' messages are never stored as sentences or shown to others: only single words and counts are kept,
+and only Ohm's replies are broadcast.
 
-### 3. Learning: which words, and the triple counts
+### 3. Learning: words, triples and the visitor rule
 
 `hear()` looks at each word:
 
@@ -75,8 +81,8 @@ single words and triple counts are kept, and only Ohm's replies are broadcast.
 | in the Indonesian or English word list | Ohm learns it and remembers who taught it (for the feed and "while you were away") |
 | unknown | it waits in the `pending` queue for the admin to approve or block |
 
-Then Ohm counts **word triples**: "after these two words, this word came next". The message is padded
-with a start marker `<s>` and an end marker `</s>`:
+Then Ohm counts **word triples**: "after these two words, this word came next". The message is padded with a
+start marker `<s>` and an end marker `</s>`, and stored in `grams (p2, p1, next, count, last_by)`:
 
 ```
 "aku suka kopi"  →  <s> <s> aku suka kopi </s>
@@ -84,71 +90,83 @@ with a start marker `<s>` and an end marker `</s>`:
 (<s>, <s>)  → aku
 (<s>, aku)  → suka
 (aku, suka) → kopi
-(suka, kopi)→ </s>      each one: count + 1
+(suka, kopi)→ </s>
 ```
 
-They're stored in one table, `grams (p2, p1, next, count)`: p2 = two words back, p1 = the previous word.
+**The visitor rule:** a count only goes up when a **different visitor** (salted IP hash) than last time typed
+it. `last_by` remembers who raised it last. So count 2 means "at least two different people typed this", and
+one person repeating a sentence 30 times still counts once.
 
-**Unknown words cut the chain.** "aku suka xyzzy kopi" is learned as two separate pieces,
-`aku suka` and `kopi`. That way Ohm never learns that `kopi` can follow `suka` from a sentence it
-didn't fully understand.
+**Unknown words cut the chain.** "aku suka xyzzy kopi" is learned as two pieces, `aku suka` and `kopi`, so
+Ohm never learns that `kopi` follows `suka` from a sentence it didn't fully understand.
 
-#### Example
+### 4. No levels: trust grows with evidence
 
-After three visitors type `aku suka kopi`, `aku suka teh` and `kamu suka kopi`, the table holds:
+To pick the next word, Ohm looks at the **last two words** (the triple), else the **last word** (all triples
+with that p1, added up), else it **babbles**. Each step uses *absolute discounting*: every count loses 1.
 
-| p2 | p1 | next | count |
-|---|---|---|---|
-| `<s>` | `<s>` | aku | 2 |
-| `<s>` | `<s>` | kamu | 1 |
-| `<s>` | aku | suka | 2 |
-| `<s>` | kamu | suka | 1 |
-| aku | suka | kopi | 1 |
-| aku | suka | teh | 1 |
-| kamu | suka | kopi | 1 |
-| suka | kopi | `</s>` | 2 |
-| suka | teh | `</s>` | 1 |
+Example: Rina and Budi typed `aku suka kopi`, Citra typed `aku suka teh`. After `aku suka`:
 
-### 4. Brain levels: how much context Ohm uses
-
-The level comes from the vocabulary size (`brain_level` in `cpp/pet.cpp`):
-
-| Level | Vocabulary | How Ohm picks the next word |
+| next | count | count − 1 |
 |---|---|---|
-| 1 | under 50 words | no chain yet: 1–3 random known words + `beep` |
-| 2 | 50–299 | looks at the **previous word** only |
-| 3 | 300+ | looks at the **previous two words**. If that pair was never seen, it falls back to level 2 |
+| kopi | 2 | 1 |
+| teh | 1 | 0 |
 
-Level 2 uses the same table. It adds up the counts over every p2 (`SUM(count) … WHERE p1 = ? GROUP BY next`).
-In the example, after `suka`: **kopi 2** (1 + 1) and **teh 1**, so kopi is picked 2 times out of 3.
+The total is 3 and there are 2 rows, so Ohm follows this context (3 − 2) / 3 = **1 time in 3**, and then always
+says kopi. The other 2 times it backs off to the last word only. **Teh, typed by one visitor, is never picked
+from a pattern.** That's the privacy rule: Ohm doesn't repeat what only one person typed. A context he has
+seen a lot is followed almost always, so real sentences appear by themselves as the counts grow.
 
-Level 3 is pickier. After `kamu suka` it has only ever seen `kopi`, so it always says kopi.
-After `aku suka` it's 50/50. More context means Ohm sounds more like real sentences,
-but it needs far more data. That's why level 3 only starts at 300 words.
+**Babble** stops as often as real sentences end (`ends / (tokens + ends)`), otherwise it says any known word
+(a random rowid: 1 row read). A reply made only of babble ends with `beep`.
 
-### 5. Talking: `reply()`
+### 5. Situations: which words belong where
 
-1. **Pick a start word (the seed).** Ohm picks the known word from your message with the **lowest `uses`**.
-   The rarest word is usually the topic ("kopi", not "aku"). If none of your words is known, it picks a random known word.
-2. **Walk the chain.** From the seed, it looks up the possible next words with their counts and picks one
-   at random, weighted by count (step 6). Then it shifts: the last two words become the new context.
-3. **Stop** at `</s>`, when no next word exists, or after 12 words.
+`situation.ts` turns the moment into on/off facts: the part of the day in Bandung (`pagi`, `siang`, `sore`,
+`malam`), `rain`, `hot` (above 30 °C), `battery_low` (below 50), `mood_low` (below 30), and `charge`/`play`/
+`reboot` if *this* visitor did that in the last minute.
 
-Example at level 2: you type `kamu suka apa`. `apa` is unknown, `kamu` is rarer than `suka`, so the seed is `kamu`.
+Each word sighting (visitor rule again) is counted per situation in `word_ctx (word, situation, n)`, with the
+totals in the mind. A word gets a **link** (`links`) to the situation it's most clearly tied to, if Dunning's
+**G²** says it's no coincidence (G² ≥ 10.83, p < 0.001) and the situation is more likely when the word is said.
+G² compares a 2×2 table: this word or not × situation on or off.
 
-```
-kamu → suka (only option) → kopi (2/3) or teh (1/3) → </s>
-     = "kamu suka kopi"   or   "kamu suka teh"
-```
+Example: ten visitors chat in the dry (30 sightings). One visitor says `hujan` in the rain: G² = 8.8, which
+could be chance, so no link. A second visitor says it: G² = 15.0, so **hujan → rain**. The Wilson rule from the first
+plan would have linked it after one sighting; in the simulation it got only 22% of links right, G² got 92%.
 
-Extras: at night Ohm talks in its sleep (`zzz… `). If mood is empty it sulks instead of answering.
-Every word it says bumps a `said` counter, which feeds "Ohm used your words N times".
+### 6. Talking: `reply()`
 
-### 6. The weighted pick, in C++
+1. **Pick a start word (the seed).** Usually the **topic**: the known word from your message with the lowest
+   `uses` ("kopi", not "aku"). 30% of the time, or when none of your words is known, Ohm starts from **what's on
+   his mind**: the word most clearly tied to his current situation (`hujan` when it rains). Otherwise a random
+   known word.
+2. **Walk the chain** (step 4) until `</s>` or 12 words.
 
-`pickWeighted` (TypeScript) writes the counts into a fixed buffer inside the WebAssembly memory
-(`weights_ptr`, at most 4096 values, so there's no heap). Then it calls `pick_weighted(n, r)`,
-with `r` a random number in [0, 1):
+Extras: at night Ohm talks in his sleep (`zzz… `). If mood is empty he sulks instead of answering. Every word
+he says bumps a `said` counter, which feeds "Ohm used your words N times".
+
+### 7. Skills: the brain level, measured
+
+Every message is scored **before** Ohm learns from it, so each one is a fair test. A skill is the average of
+about the last 100 observations (`s ← s + (hit − s) / 100`), from 0 to 1:
+
+| Skill | One observation | Hit when |
+|---|---|---|
+| words | each word in a message | Ohm already knew it |
+| sentences | each pair of known words | Ohm had seen that pair in that order |
+| context | each word with a link | its situation is on right now |
+| expression | a pat or frown on Ohm's reply (`rate`, only by the visitor he answered, once) | it's a pat |
+
+They're in `/state` as `brain.skills` and in the hourly snapshots. The old `level` fields stay until the site
+shows the skills. Pats only move the meter: in the simulation, letting them change the counts either did
+nothing measurable (+1) or made Ohm copy himself (+5).
+
+### 8. The weighted pick, in C++
+
+`pickWeighted` (TypeScript) writes the weights (count − 1) into a fixed buffer inside the WebAssembly memory
+(`weights_ptr`, at most 4096 values, so there's no heap). Then it calls `pick_weighted(n, r)`, with `r` a
+random number in [0, 1):
 
 ```
 weights = [2, 1]  (kopi, teh)    total = 3
@@ -156,17 +174,21 @@ r = 0.4 → x = 1.2 → 1.2 − 2 < 0  → index 0 → kopi
 r = 0.8 → x = 2.4 → 2.4 − 2 = 0.4 → 0.4 − 1 < 0 → index 1 → teh
 ```
 
-Think of it as a line of length `total`, cut into pieces as long as each count. `r` points somewhere on the
-line, and the piece it lands in wins. When there are more than 4096 candidates, only the 4096 most common are kept.
+Think of it as a line of length `total`, cut into pieces as long as each weight. `r` points somewhere on the
+line, and the piece it lands in wins. A weight of 0 has no piece, so it's never picked.
 
-### 7. Moderation hooks
+### 9. Moderation hooks
 
 - **Approve** (admin): a word from the queue joins the vocabulary. It gets no triples until someone uses it again.
-- **Block** (admin): the word is removed from `words`, `pending` **and every triple that contains it**, so Ohm can never say it again.
+- **Block** (admin): the word is removed from `words`, `pending`, every triple and its situation counts and link, so Ohm can never say it again.
 - **Report** (visitor): flags one of Ohm's lines for the admin page. The admin can remove it from everyone's screen (`unsay`).
+- **Reset** (admin, `POST /admin/reset` with `{"confirm":"RESET"}`): Ohm forgets everything he learned. The blocklist, bans, reports, past lines, feed, Vitals history and milestones stay.
 
-### Known limitation
+### Known limitations
 
-A rare word has only a few triples, so a sentence can come back almost word for word when someone
-uses one of its rare words later. The chat warns "don't type anything personal". A possible future fix is to
-only follow triples that two or more different visitors typed.
+- **One IP, one visitor.** People behind the same IP (one Wi-Fi, some mobile networks) count as one visitor,
+  so they teach more slowly. Locally, all your tabs are one visitor: Ohm will mostly babble.
+- **Two people can still agree on a sentence.** The visitor rule stops one troll, not two.
+- **One link per word, and confounds.** In the simulation `panas` got linked to `siang`, because hot hours are
+  midday hours.
+- **Rare situations learn slowly.** `reboot` almost never happens, so its words may never get a link.

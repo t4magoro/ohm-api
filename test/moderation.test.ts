@@ -8,6 +8,7 @@ import {
   fileReport,
   isBanned,
   overview,
+  resetBrain,
   search,
   unban,
   unblockWord,
@@ -71,6 +72,24 @@ describe("word moderation", () => {
     expect(found.blocked).toEqual([{ word: "kopi" }]);
     expect(search(sql, "%").words).toEqual([]);
     expect(search(sql, "_").words).toEqual([]);
+  });
+});
+
+describe("reset", () => {
+  it("wipes everything Ohm learned and keeps moderation and history", () => {
+    hear(sql, lexicon, ["aku", "suka", "wkwk"], RINA, T0, DRY);
+    blockWord(sql, "kopi");
+    ban(sql, RINA.ipHash, T0);
+    sql.exec("INSERT INTO lines (at, text, to_name, ip_hash) VALUES (?, 'aku suka', 'Rina', ?)", T0, RINA.ipHash);
+    resetBrain(sql);
+    for (const table of ["words", "pending", "grams", "word_ctx", "links"]) {
+      expect(count(sql, `SELECT COUNT(*) AS n FROM ${table}`)).toBe(0);
+    }
+    expect(count(sql, "SELECT COUNT(*) AS n FROM kv WHERE key IN ('brain', 'mind')")).toBe(0);
+    expect(count(sql, "SELECT COUNT(*) AS n FROM blocked")).toBe(1);
+    expect(isBanned(sql, RINA.ipHash)).toBe(true);
+    expect(count(sql, "SELECT COUNT(*) AS n FROM lines")).toBe(1);
+    expect(hear(sql, lexicon, ["aku"], RINA, T0, DRY).learned).toEqual(["aku"]); // learns again from zero
   });
 });
 
