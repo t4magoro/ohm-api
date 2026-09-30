@@ -123,6 +123,27 @@ describe("vitals", () => {
     ]);
     expect(v.topWords[0]).toEqual({ word: "kopi", uses: 9, said: 7, by: "Rina" });
   });
+
+  it("returns each hour's skills, or null for snapshots from before brain v2", () => {
+    const skills = { words: 0.5, sentences: 0.25, context: 0, expression: 1 };
+    snapshot(sql, newPet(T0, SUNNY), { ...BRAIN, skills }, 1, T0);
+    sql.exec("INSERT INTO snapshots (at, charge, mood, vocab, online) VALUES (?, 50, 50, 3, 0)", T0 + HOUR); // an old row
+    const now = T0 + 2 * HOUR;
+    const v = vitals(sql, standing(newPet(T0, SUNNY), 0, now), [], BRAIN, now);
+    expect(v.snapshots.map((s) => s.skills)).toEqual([skills, null]);
+  });
+
+  it("lists the strongest links, only for words two different visitors used", () => {
+    for (const [w, seen] of [["hujan", 3], ["panas", 2], ["rahasia", 1]] as const) {
+      sql.exec("INSERT INTO words (word, langs, by_id, by_name, at, uses, seen) VALUES (?, 'id', 'v', 'Rina', ?, 1, ?)", w, T0, seen);
+    }
+    sql.exec("INSERT INTO links (word, situation, g2, lift) VALUES ('hujan', 'rain', 30, 4), ('panas', 'hot', 12, 6), ('rahasia', 'malam', 50, 9)");
+    const v = vitals(sql, standing(newPet(T0, SUNNY), 3, T0), [], BRAIN, T0);
+    expect(v.links).toEqual([
+      { word: "hujan", situation: "rain", lift: 4 },
+      { word: "panas", situation: "hot", lift: 6 },
+    ]);
+  });
 });
 
 describe("away", () => {

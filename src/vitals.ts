@@ -16,7 +16,14 @@ const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const WEEK = 7 * DAY;
 const BANDUNG = 7 * HOUR; // Bandung is UTC+7 all year: Indonesia has no daylight saving
+const LINKS_SHOWN = 12;
 
+type SnapshotRow = Omit<Snapshot, "skills"> & {
+  skill_words: number | null;
+  skill_sentences: number | null;
+  skill_context: number | null;
+  skill_expression: number | null;
+};
 const count = (sql: SqlStorage, query: string, ...params: (string | number)[]) =>
   sql.exec<{ n: number }>(query, ...params).one().n;
 
@@ -87,9 +94,20 @@ export function vitals(sql: SqlStorage, s: Record<Counts, number>, unlocked: Mil
 
   return {
     snapshots: sql
-      .exec<Snapshot>("SELECT at, charge, mood, vocab, online FROM snapshots WHERE at > ? ORDER BY at", week)
-      .toArray(),
-    hours,
+      .exec<SnapshotRow>(
+        `SELECT at, charge, mood, vocab, online, skill_words, skill_sentences, skill_context, skill_expression
+         FROM snapshots WHERE at > ? ORDER BY at`,
+        week,
+      )
+      .toArray()
+      .map(({ skill_words, skill_sentences, skill_context, skill_expression, ...s }) => ({
+        ...s,
+        // Snapshots from before brain v2 have no skills: not measured, which isn't the same as 0.
+        skills:
+          skill_words === null
+            ? null
+            : { words: skill_words, sentences: skill_sentences!, context: skill_context!, expression: skill_expression! },
+      })),    hours,
     growth: sql
       .exec<{ day: string; words: number }>(
         `SELECT date((at + ${BANDUNG}) / 1000, 'unixepoch') AS day, COUNT(*) AS words FROM words GROUP BY day ORDER BY day`,
@@ -98,6 +116,14 @@ export function vitals(sql: SqlStorage, s: Record<Counts, number>, unlocked: Mil
     topWords: sql
       .exec<Vitals["topWords"][number]>(
         `SELECT word, uses, said, by_name AS "by" FROM words ORDER BY uses DESC, said DESC LIMIT 10`,
+      )
+      .toArray(),
+    // Only words that two different visitors used (seen >= 2 needs a second, different visitor: see brain.ts),
+    // so this public list never rests on what just one person typed.
+    links: sql
+      .exec<Vitals["links"][number]>(
+        `SELECT l.word, l.situation, l.lift FROM links l JOIN words w ON w.word = l.word
+         WHERE w.seen >= 2 ORDER BY l.g2 DESC LIMIT ${LINKS_SHOWN}`,
       )
       .toArray(),
     milestones: progress(sql, s, unlocked, now),
