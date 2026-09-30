@@ -31,6 +31,25 @@ const STEPS: string[][] = [
     "CREATE INDEX IF NOT EXISTS words_at ON words (at)",
     "CREATE INDEX IF NOT EXISTS words_by ON words (by_id)",
   ],
+
+  // 5 (brain v2): the visitor rule (seen, seen_by, last_by), word + situation counts and links, ratings,
+  // and the skills in the hourly snapshot. The (p1, next) index serves both the one-word back-off and the
+  // "was this pair seen?" test, so it replaces the p1-only one.
+  [
+    "ALTER TABLE words ADD COLUMN seen INTEGER DEFAULT 0",
+    "ALTER TABLE words ADD COLUMN seen_by TEXT",
+    "ALTER TABLE grams ADD COLUMN last_by TEXT",
+    "DROP INDEX IF EXISTS grams_p1",
+    "CREATE INDEX IF NOT EXISTS grams_p1_next ON grams (p1, next)",
+    "CREATE TABLE IF NOT EXISTS word_ctx (word TEXT, situation TEXT, n INTEGER, PRIMARY KEY (word, situation)) WITHOUT ROWID",
+    "CREATE TABLE IF NOT EXISTS links (word TEXT PRIMARY KEY, situation TEXT, g2 REAL, lift REAL) WITHOUT ROWID",
+    "CREATE INDEX IF NOT EXISTS links_situation ON links (situation)",
+    "ALTER TABLE lines ADD COLUMN rated INTEGER",
+    "ALTER TABLE snapshots ADD COLUMN skill_words REAL",
+    "ALTER TABLE snapshots ADD COLUMN skill_sentences REAL",
+    "ALTER TABLE snapshots ADD COLUMN skill_context REAL",
+    "ALTER TABLE snapshots ADD COLUMN skill_expression REAL",
+  ],
 ];
 
 export function migrate(sql: SqlStorage) {

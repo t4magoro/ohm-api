@@ -14,6 +14,7 @@ import {
   unsay,
 } from "../src/moderation";
 import { DEFAULT_SETTINGS } from "../src/protocol";
+import type { Situation } from "../src/situation";
 import { makeLexicon } from "../src/words";
 import { count, testSql } from "./sql";
 
@@ -27,6 +28,7 @@ vi.mock("../src/wasm", async () => {
 const RINA = { id: "visitor-rina", name: "Rina", ipHash: "0123456789abcdef" };
 const T0 = Date.UTC(2026, 9, 1);
 const lexicon = makeLexicon({ id: "aku\nsuka\nkopi", en: "" }, "");
+const DRY: Situation[] = ["siang"];
 
 let sql: SqlStorage;
 beforeEach(() => {
@@ -35,24 +37,25 @@ beforeEach(() => {
 
 describe("word moderation", () => {
   it("approving a queued word teaches it to Ohm", () => {
-    hear(sql, lexicon, ["wkwk"], RINA, T0);
+    hear(sql, lexicon, ["wkwk"], RINA, T0, DRY);
     approveWord(sql, "wkwk", "id", T0);
     expect(count(sql, "SELECT COUNT(*) AS n FROM pending")).toBe(0);
     expect(sql.exec("SELECT langs, by_name FROM words WHERE word = 'wkwk'").one()).toEqual({ langs: "id", by_name: "admin" });
   });
 
   it("blocking a word makes Ohm forget it everywhere and never learn it again", () => {
-    hear(sql, lexicon, ["aku", "suka", "kopi"], RINA, T0);
+    hear(sql, lexicon, ["aku", "suka", "kopi"], RINA, T0, DRY);
     blockWord(sql, "suka");
     expect(count(sql, "SELECT COUNT(*) AS n FROM words WHERE word = 'suka'")).toBe(0);
     expect(count(sql, "SELECT COUNT(*) AS n FROM grams WHERE 'suka' IN (p2, p1, next)")).toBe(0);
-    expect(hear(sql, lexicon, ["suka"], RINA, T0).blocked).toBe(true);
+    expect(count(sql, "SELECT COUNT(*) AS n FROM word_ctx WHERE word = 'suka'")).toBe(0);
+    expect(hear(sql, lexicon, ["suka"], RINA, T0, DRY).blocked).toBe(true);
     unblockWord(sql, "suka");
-    expect(hear(sql, lexicon, ["suka"], RINA, T0).learned).toEqual(["suka"]);
+    expect(hear(sql, lexicon, ["suka"], RINA, T0, DRY).learned).toEqual(["suka"]);
   });
 
   it("the overview lists what needs your attention", () => {
-    hear(sql, lexicon, ["aku", "wkwk"], RINA, T0);
+    hear(sql, lexicon, ["aku", "wkwk"], RINA, T0, DRY);
     const o = overview(sql, DEFAULT_SETTINGS);
     expect(o.pending).toEqual([{ word: "wkwk", seen: 1 }]);
     expect(o.words).toEqual([{ word: "aku", by: "Rina", ipHash: "0123456789abcdef", at: T0 }]);
@@ -60,7 +63,7 @@ describe("word moderation", () => {
   });
 
   it("search finds a word in every list, and % or _ only match themselves", () => {
-    hear(sql, lexicon, ["aku", "suka", "wkwk"], RINA, T0);
+    hear(sql, lexicon, ["aku", "suka", "wkwk"], RINA, T0, DRY);
     blockWord(sql, "kopi");
     const found = search(sql, "k");
     expect(found.words.map((w) => w.word)).toEqual(["aku", "suka"]);

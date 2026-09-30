@@ -23,9 +23,12 @@ export type Settings = { chargeHours: number; moodHours: number };
 export const DEFAULT_SETTINGS: Settings = { chargeHours: 20, moodHours: 12.5 };
 export const HOURS_RANGE = [1, 168] as const; // one hour to one week
 
-/** What Ohm knows, for the Spellbook. Levels come from pet.cpp. */
+/** How well Ohm does, 0 to 1. Measured on every message before he learns from it. */
+export type Skills = { words: number; sentences: number; context: number; expression: number };
+
+/** What Ohm knows, for the Spellbook. The step levels come from pet.cpp; they stay until the site shows `skills`. */
 export type LangStat = { words: number; level: number };
-export type Brain = { vocab: number; level: number; langs: { id: LangStat; en: LangStat } };
+export type Brain = { vocab: number; level: number; langs: { id: LangStat; en: LangStat }; skills: Skills };
 
 /** Goals everyone works on together. Reaching one gives Ohm a new part on its sprite, for good. */
 export const MILESTONES = [
@@ -53,7 +56,8 @@ export type ClientMsg =
   | { t: "play" }
   | { t: "reboot" }
   | { t: "say"; text: string }
-  | { t: "report"; lineId: number };
+  | { t: "report"; lineId: number }
+  | { t: "rate"; lineId: number; pat: boolean }; // pat (true) or frown (false) at Ohm's reply to you
 
 export type ServerMsg =
   | { t: "state"; pet: Pet; weather: Weather; brain: Brain; unlocked: MilestoneId[]; now: number }

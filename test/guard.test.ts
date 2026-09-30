@@ -12,6 +12,7 @@ describe("parseClientMessage", () => {
     });
     expect(parseClientMessage('{"t":"say","text":"aku suka kopi"}')).toEqual({ t: "say", text: "aku suka kopi" });
     expect(parseClientMessage('{"t":"report","lineId":7}')).toEqual({ t: "report", lineId: 7 });
+    expect(parseClientMessage('{"t":"rate","lineId":7,"pat":false}')).toEqual({ t: "rate", lineId: 7, pat: false });    
   });
 
   it("keeps a valid lastSeen and drops a broken one without refusing the hello", () => {

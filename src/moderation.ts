@@ -20,6 +20,8 @@ export function blockWord(sql: SqlStorage, word: string) {
   sql.exec("DELETE FROM pending WHERE word = ?", word);
   sql.exec("DELETE FROM words WHERE word = ?", word);
   sql.exec("DELETE FROM grams WHERE p2 = ? OR p1 = ? OR next = ?", word, word, word);
+  sql.exec("DELETE FROM word_ctx WHERE word = ?", word);
+  sql.exec("DELETE FROM links WHERE word = ?", word);
 }
 
 export function unblockWord(sql: SqlStorage, word: string) {

@@ -2,9 +2,10 @@ import { DurableObject } from "cloudflare:workers";
 import { parseAdminCommand } from "./admin";
 import { brainStats, hear, reply } from "./brain";
 import { cooldown, hashIp, parseClientMessage } from "./guard";
-import { feed, lines, logEvent, saveLine } from "./history";
+import { feed, lines, logEvent, markRated, saveLine } from "./history";
 import { kvGet, kvSet } from "./kv";
 import { lexicon } from "./lexicon";
+import { rate, skills } from "./mind";
 import {
   approveWord,
   ban,
@@ -33,6 +34,7 @@ import {
   type Weather,
 } from "./protocol";
 import { migrate } from "./schema";
+import { situation, type Care } from "./situation";
 import { away, reached, snapshot, standing, vitals } from "./vitals";
 import { DEFAULT_WEATHER, fetchBandungWeather, parseWeather } from "./weather";
 import { hasBlocked, tokenize } from "./words";
@@ -42,7 +44,7 @@ const WEATHER_EVERY = 15 * 60_000; // Open-Meteo refreshes every 15 minutes
 const VITALS_EVERY = 5 * 60_000; // GET /vitals is recalculated at most this often
 
 /** What Ohm remembers about each open WebSocket. Stored on the socket, so it survives hibernation. */
-type Visitor = { ipHash: string; id: string; name: string; helloAt: number };
+type Visitor = { ipHash: string; id: string; name: string; helloAt: number; lastCare?: { t: Care; at: number } };
 
 // The one and only Ohm. Every visitor connects to this single object, and it handles
 // one message at a time, so there is never more than one copy of Ohm's state.
@@ -111,6 +113,7 @@ export class Ohm extends DurableObject<Env> {
     }
     if (msg.t === "say") return this.say(ws, me, msg.text, now);
     if (msg.t === "report") return this.report(ws, me, msg.lineId, now);
+    if (msg.t === "rate") return this.rate(ws, me, msg.lineId, msg.pat);
 
     if (!this.careAllowed(me.ipHash, now)) {
       return this.send(ws, { t: "error", msg: "Slow down: one action every 3 seconds" });
@@ -119,6 +122,7 @@ export class Ohm extends DurableObject<Env> {
     const problem = act(pet, msg.t, now, this.conditions());
     if (problem) return this.send(ws, { t: "error", msg: problem });
     this.save(pet);
+    ws.serializeAttachment({ ...me, lastCare: { t: msg.t, at: now } } satisfies Visitor); // for situation.ts
     this.broadcast({ t: "event", e: logEvent(this.sql, now, msg.t, me.id, me.name) });
     this.unlock(pet, now);
     this.broadcast(this.stateMsg(pet, now));
@@ -139,17 +143,18 @@ export class Ohm extends DurableObject<Env> {
 
     // Answer first, learn second. The other way round, a sentence full of new words comes
     // straight back out of Ohm, word for word, to everyone online.
+    const on = situation(this.weather(), pet, now, me.lastCare); // rain, night, hungry, just charged…
     let answer: string;
     if (isSulking(pet, now)) {
       answer = "… (Ohm is sulking. Play with it first)";
     } else {
       act(pet, "chat", now, this.conditions());
       this.save(pet);
-      answer = reply(this.sql, words) ?? "beep?";
+      answer = reply(this.sql, words, on) ?? "beep?";
       if (!this.weather().isDay) answer = `zzz… ${answer}`; // it talks in its sleep
     }
 
-    const heard = hear(this.sql, lexicon, words, me, now);
+    const heard = hear(this.sql, lexicon, words, me, now, on);
     if (heard.learned.length > 0) {
       kvSet(this.sql, "brain", brainStats(this.sql));
       this.broadcast({ t: "event", e: logEvent(this.sql, now, "taught", me.id, me.name, heard.learned.join(", ")) });
@@ -164,6 +169,14 @@ export class Ohm extends DurableObject<Env> {
     if (!this.reportAllowed(me.ipHash, now)) return this.send(ws, { t: "error", msg: "One report every 30 seconds" });
     if (!fileReport(this.sql, lineId, me.id, now)) return this.send(ws, { t: "error", msg: "That line doesn't exist" });
     this.send(ws, { t: "notice", msg: "Thanks! The report was sent for review." });
+  }
+
+  /** A visitor pats or frowns at Ohm's reply to them: the Expression skill. It doesn't change what Ohm says. */
+  private rate(ws: WebSocket, me: Visitor, lineId: number, pat: boolean) {
+    if (!markRated(this.sql, lineId, me.ipHash, pat)) {
+      return this.send(ws, { t: "error", msg: "You can rate Ohm's replies to you, once each" });
+    }
+    rate(this.sql, pat);
   }
 
   async webSocketClose(ws: WebSocket) {
@@ -193,7 +206,7 @@ export class Ohm extends DurableObject<Env> {
     }
     const now = Date.now();
     const pet = this.load(now); // notices a shutdown even when nobody is online
-    snapshot(this.sql, pet, this.brain().vocab, this.online(), now);
+    snapshot(this.sql, pet, this.brain(), this.online(), now);
     if (this.unlock(pet, now)) this.broadcast(this.stateMsg(pet, now)); // "alive 7 days" grows with time alone
   }
 
@@ -277,14 +290,14 @@ export class Ohm extends DurableObject<Env> {
     return { weather: this.weather(), settings: this.settings() };
   }
 
-  /** Kept in kv and recalculated only when the vocabulary changes, so it's cheap to send often. */
+  /** Vocabulary and levels are kept in kv and recalculated only when the vocabulary changes; the skills change with every message. */
   private brain(): Brain {
-    let brain = kvGet<Brain>(this.sql, "brain");
-    if (!brain) {
-      brain = brainStats(this.sql);
-      kvSet(this.sql, "brain", brain);
+    let stats = kvGet<Omit<Brain, "skills">>(this.sql, "brain");
+    if (!stats) {
+      stats = brainStats(this.sql);
+      kvSet(this.sql, "brain", stats);
     }
-    return brain;
+    return { ...stats, skills: skills(this.sql) };
   }
 
   /** The parts Ohm has earned. Once unlocked, a milestone stays unlocked. */
