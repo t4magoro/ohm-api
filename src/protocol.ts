@@ -100,6 +100,9 @@ export type AdminSearch = Pick<AdminOverview, "words" | "pending" | "blocked"> &
 export const MAX_SAY = 200; // characters in one chat message
 export const BANNED = 4003; // WebSocket close code for a banned visitor
 
+export const CARE_GAP_MS = 3_000; // one charge, play or reboot per visitor every 3 s
+export const SAY_GAP_MS = 10_000; // one chat message per visitor every 10 s
+
 // Same formula as value_now in pet.cpp. The browser uses it to animate the bars;
 // the server's C++ is the source of truth.
 export const valueNow = (s: Stat, now: number) =>

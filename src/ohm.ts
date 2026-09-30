@@ -22,6 +22,8 @@ import { act, applyConditions, catchUp, isSulking, newPet, type Conditions } fro
 import {
   BANNED,
   DEFAULT_SETTINGS,
+  SAY_GAP_MS,
+  CARE_GAP_MS,
   type Brain,
   type MilestoneId,
   type Pet,
@@ -47,8 +49,8 @@ type Visitor = { ipHash: string; id: string; name: string; helloAt: number };
 // It connects visitors and decides what happens; the storage details live in the imported files.
 export class Ohm extends DurableObject<Env> {
   private sql: SqlStorage;
-  private careAllowed = cooldown(3_000);
-  private sayAllowed = cooldown(10_000);
+  private careAllowed = cooldown(CARE_GAP_MS);
+  private sayAllowed = cooldown(SAY_GAP_MS);
   private reportAllowed = cooldown(30_000);
   private vitalsCache: Vitals | null = null;
 
