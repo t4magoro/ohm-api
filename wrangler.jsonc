@@ -9,5 +9,7 @@
   "durable_objects": { "bindings": [{ "name": "OHM", "class_name": "Ohm" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Ohm"] }],
   // Empty = real Bandung weather. Your .dev.vars can set a fake one for local testing.
-  "vars": { "FAKE_WEATHER": "" }
+  "vars": { "FAKE_WEATHER": "" },
+
+  "observability": { "enabled": true, "traces": { "enabled": false } }
 }
