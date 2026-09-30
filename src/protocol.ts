@@ -29,10 +29,9 @@ export type Skills = { words: number; sentences: number; context: number; expres
 /** What's happening around Ohm (situation.ts): weather, Bandung's part of the day, low stats, what a visitor just did. */
 export type Care = "charge" | "play" | "reboot";
 export type Situation = "rain" | "hot" | "pagi" | "siang" | "sore" | "malam" | "battery_low" | "mood_low" | Care;
-/** What Ohm knows, for the Spellbook. The step levels come from pet.cpp; they stay until the site shows `skills`. */
-export type LangStat = { words: number; level: number };
-export type Brain = { vocab: number; level: number; langs: { id: LangStat; en: LangStat }; skills: Skills };
-
+/** What Ohm knows, for the Spellbook: its vocabulary, words per language, and the four skills. */
+export type LangStat = { words: number };
+export type Brain = { vocab: number; langs: { id: LangStat; en: LangStat }; skills: Skills };
 /** Goals everyone works on together. Reaching one gives Ohm a new part on its sprite, for good. */
 export const MILESTONES = [
   { id: "antenna", counts: "words", goal: 100, goalText: "Teach Ohm 100 words", part: "a tall antenna" },

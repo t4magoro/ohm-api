@@ -17,8 +17,7 @@ const T0 = Date.UTC(2026, 9, 1); // 07:00 in Bandung
 const SUNNY = { weather: { tempC: 27, raining: false, isDay: true }, settings: DEFAULT_SETTINGS };
 const BRAIN = {
   vocab: 0,
-  level: 1,
-  langs: { id: { words: 0, level: 0 }, en: { words: 0, level: 0 } },
+  langs: { id: { words: 0 }, en: { words: 0 } },
   skills: { words: 0, sentences: 0, context: 0, expression: 0 },
 };
 
