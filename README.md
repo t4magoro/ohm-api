@@ -154,6 +154,17 @@ plan would have linked it after one sighting; in the simulation it got only 22% 
 Extras: at night Ohm talks in his sleep (`zzz… `). If mood is empty he sulks instead of answering. Every word
 he says bumps a `said` counter, which feeds "Ohm used your words N times".
 
+**Why Ohm said that.** `reply()` also returns how it built the answer (`Why` in `src/protocol.ts`), sent with the
+live `line` message for the site's "think" button:
+
+- `seed`: where Ohm started: your topic, the word tied to his situation (with that link's lift), or a random word.
+- `steps`: for every word, the rungs he tried with their chance, then the share of the word he picked, or, when
+  he babbled, his chance to stop.
+
+The numbers are exactly the ones Ohm used, from rows he had already read: no extra request, no extra row read.
+`why` is never stored, so lines that come with the page have none. It only names words Ohm said, and a pattern
+only one visitor typed has weight 0, so it can never be picked. Two things it does tell everyone: a chance shows
+how many *different* things people said after those words (never what), and a topic seed was in your message.
 ### 7. Skills: the brain level, measured
 
 Every message is scored **before** Ohm learns from it, so each one is a fair test. A skill is the average of

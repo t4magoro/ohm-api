@@ -18,11 +18,12 @@ vi.mock("../src/wasm", async () => {
 const visitor = (n: number) => ({ id: `visitor-${n}`, name: `V${n}`, ipHash: n.toString(16).padStart(16, "0") });
 const RINA = visitor(1);
 const BUDI = visitor(2);
+const CITRA = visitor(3);
 const T0 = Date.UTC(2026, 9, 1);
 const DRY: Situation[] = ["siang"];
 const RAIN: Situation[] = ["siang", "rain"];
 // A tiny lexicon: "badword" stands in for a real blocked word.
-const lexicon = makeLexicon({ id: "aku\nsuka\nkopi\nhujan", en: "i\nlike\ncoffee\nkopi" }, "badword");
+const lexicon = makeLexicon({ id: "aku\nsuka\nkopi\nhujan\nteh", en: "i\nlike\ncoffee\nkopi" }, "badword");
 
 let sql: SqlStorage;
 beforeEach(() => {
@@ -83,14 +84,14 @@ describe("reply", () => {
 
   it("only babbles what a single visitor taught, however often", () => {
     for (let i = 0; i < 5; i++) say("aku suka kopi");
-    for (const r of [0, 0.3, 0.6, 0.9]) expect(reply(sql, ["aku"], DRY, () => r)).toMatch(/ beep$/);
+    for (const r of [0, 0.3, 0.6, 0.9]) expect(reply(sql, ["aku"], DRY, () => r)!.text).toMatch(/ beep$/);
     expect(skills(sql).sentences).toBe(0); // every word was babble
   });
 
   it("follows a pattern once two visitors typed it", () => {
     say("aku suka kopi");
     say("aku suka kopi", BUDI);
-    expect(reply(sql, ["aku"], DRY, () => 0)).toBe("aku suka kopi");
+    expect(reply(sql, ["aku"], DRY, () => 0)!.text).toBe("aku suka kopi");
     expect(skills(sql).sentences).toBeCloseTo(0.029701); // suka, kopi and the end all came from patterns: 3 hits
   });
 
@@ -99,29 +100,70 @@ describe("reply", () => {
       { next: "kopi", count: 2 },
       { next: "teh", count: 1 },
     ];
-    for (const r of [0, 0.1, 0.2, 0.33]) expect(follow(afterAkuSuka, () => r)).toBe("kopi");
-    expect(follow(afterAkuSuka, () => 0.34)).toBeUndefined(); // 2 of 3 times Ohm backs off to "suka" alone
-    expect(follow([{ next: "teh", count: 1 }], () => 0)).toBeUndefined();
+    for (const r of [0, 0.1, 0.2, 0.33]) {
+      expect(follow(afterAkuSuka, () => r)).toEqual({ chance: 1 / 3, followed: true, word: "kopi", share: 1 });
+    }
+    expect(follow(afterAkuSuka, () => 0.34)).toEqual({ chance: 1 / 3, followed: false }); // 2 of 3 times Ohm backs off to "suka" alone
+    expect(follow([{ next: "teh", count: 1 }], () => 0)).toEqual({ chance: 0, followed: false });
   });
-
 
   it("never follows a word pair only one visitor typed, even after two different words", () => {
     say("aku kopi suka");
     say("hujan kopi suka"); // Rina typed "kopi suka" twice, after different words: still one visitor
     expect(count(sql, "SELECT count AS n FROM pairs WHERE p1 = 'kopi' AND next = 'suka'")).toBe(1);
-    expect(reply(sql, ["kopi"], DRY, () => 0)).toBe("kopi beep"); // adding up the triples would have said "kopi suka"
+    expect(reply(sql, ["kopi"], DRY, () => 0)!.text).toBe("kopi beep"); // adding up the triples would have said "kopi suka"
   });
 
   it("follows a word pair two visitors typed, even after different words", () => {
     say("aku kopi suka");
     say("hujan kopi suka", BUDI); // no triple has 2 visitors, but the pair "kopi suka" does
-    expect(reply(sql, ["kopi"], DRY, () => 0)).toBe("kopi suka");
+    expect(reply(sql, ["kopi"], DRY, () => 0)!.text).toBe("kopi suka");
   });
 
   it("counts how often Ohm said each word", () => {
     say("kopi");
     reply(sql, ["kopi"], DRY, () => 0);
     expect(sql.exec("SELECT said FROM words WHERE word = 'kopi'").one()).toEqual({ said: 1 });
+  });
+});
+
+describe("why", () => {
+  // The worked example: Rina and Budi typed "aku suka kopi", Citra typed "aku suka teh". Then someone types "aku".
+  const example = () => {
+    say("aku suka kopi");
+    say("aku suka kopi", BUDI);
+    say("aku suka teh", CITRA);
+  };
+
+  it("explains every word with the numbers Ohm used", () => {
+    example();
+    expect(reply(sql, ["aku"], DRY, () => 0)).toEqual({
+      text: "aku suka kopi",
+      why: {
+        on: DRY,
+        seed: { word: "aku", from: "topic" },
+        steps: [
+          { word: "suka", tried: [{ rung: "pair", chance: 2 / 3, followed: true }], share: 1 },
+          { word: "kopi", tried: [{ rung: "pair", chance: 1 / 3, followed: true }], share: 1 }, // teh: weight 0
+          { word: "</s>", tried: [{ rung: "pair", chance: 1 / 2, followed: true }], share: 1 },
+        ],
+      },
+    });
+  });
+
+  it("never picks a word only one visitor taught, whatever the dice say", () => {
+    example();
+    for (const r of [0, 0.2, 0.4, 0.6, 0.8, 0.99]) {
+      const { steps } = reply(sql, ["aku"], DRY, () => r)!.why;
+      for (const s of steps) if (s.stop === undefined) expect(s.word).not.toBe("teh"); // babble may say it: a single word
+    }
+  });
+
+  it("shows babble: nothing to follow, and the chance to stop", () => {
+    for (let i = 0; i < 5; i++) say("aku suka kopi"); // one visitor: 15 words, 5 sentence ends
+    expect(reply(sql, ["aku"], DRY, () => 0)!.why.steps).toEqual([
+      { word: "</s>", tried: [{ rung: "pair", chance: 0, followed: false }, { rung: "word", chance: 0, followed: false }], stop: 0.25 },
+    ]);
   });
 });
 
@@ -146,7 +188,6 @@ describe("grounding", () => {
     expect(sql.exec("SELECT word, situation FROM links").toArray()).toEqual([{ word: "hujan", situation: "rain" }]);
   });
 
-
   it("never links from a single sighting, however rare the situation", () => {
     for (let i = 10; i < 40; i++) say("aku suka kopi", visitor(i)); // 90 dry sightings
     say("hujan", visitor(1), RAIN); // alone, G² would be 11.0: past 10.83
@@ -160,7 +201,8 @@ describe("grounding", () => {
     say("hujan", phone(2), RAIN); // another browser on the same Wi-Fi
     expect(sql.exec("SELECT word, situation FROM links").toArray()).toEqual([{ word: "hujan", situation: "rain" }]);
     expect(count(sql, "SELECT MAX(count) AS n FROM grams WHERE p1 = 'hujan'")).toBe(1); // still one visitor for patterns
-  });  
+  });
+
   it("measures context: a linked word said while its situation is on", () => {
     background();
     say("hujan", visitor(1), RAIN);
@@ -175,8 +217,11 @@ describe("grounding", () => {
     background();
     say("hujan", visitor(1), RAIN);
     say("hujan", visitor(2), RAIN);
-    expect(reply(sql, ["xyz"], RAIN, () => 0)!.split(" ")[0]).toBe("hujan");
-    expect(reply(sql, ["xyz"], DRY, () => 0)!.split(" ")[0]).toBe("aku"); // no dry-weather word: a random one
+    const rainy = reply(sql, ["xyz"], RAIN, () => 0)!;
+    expect(rainy.text.split(" ")[0]).toBe("hujan");
+    expect(rainy.why.seed).toMatchObject({ word: "hujan", from: "situation", situation: "rain" });
+    expect(rainy.why.seed.lift).toBeGreaterThan(1);
+    expect(reply(sql, ["xyz"], DRY, () => 0)!.why.seed).toEqual({ word: "aku", from: "random" }); // no dry-weather word
   });
 });
 

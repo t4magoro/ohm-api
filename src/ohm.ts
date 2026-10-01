@@ -33,6 +33,7 @@ import {
   type Settings,
   type Vitals,
   type Weather,
+  type Why,
 } from "./protocol";
 import { migrate } from "./schema";
 import { situation, type Care } from "./situation";
@@ -146,12 +147,15 @@ export class Ohm extends DurableObject<Env> {
     // straight back out of Ohm, word for word, to everyone online.
     const on = situation(this.weather(), pet, now, me.lastCare); // rain, night, hungry, just charged…
     let answer: string;
+    let why: Why | undefined; // how Ohm built it, for the site's "think" button: sent live, never stored
     if (isSulking(pet, now)) {
       answer = "… (Ohm is sulking. Play with it first)";
     } else {
       act(pet, "chat", now, this.conditions());
       this.save(pet);
-      answer = reply(this.sql, words, on) ?? "beep?";
+      const said = reply(this.sql, words, on);
+      answer = said?.text ?? "beep?";
+      why = said?.why;
       if (!this.weather().isDay) answer = `zzz… ${answer}`; // it talks in its sleep
     }
 
@@ -161,7 +165,7 @@ export class Ohm extends DurableObject<Env> {
       this.broadcast({ t: "event", e: logEvent(this.sql, now, "taught", me.id, me.name, heard.learned.join(", ")) });
       this.unlock(pet, now);
     }
-    this.broadcast({ t: "line", line: saveLine(this.sql, now, answer, me.name, me.ipHash) });
+    this.broadcast({ t: "line", line: saveLine(this.sql, now, answer, me.name, me.ipHash), why });
     this.broadcast(this.stateMsg(pet, now));
   }
 
