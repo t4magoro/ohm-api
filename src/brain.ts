@@ -26,7 +26,7 @@ const exists = (sql: SqlStorage, query: string, ...params: string[]) => sql.exec
  * could have predicted. Then he learns: allowed new words join his vocabulary, unknown words wait in the
  * queue for your approval, word triples and word + situation sightings are counted. One blocked word
  * rejects everything. The visitor rule: a count only goes up when a different visitor than last time typed it.
- * Patterns count visitors by IP hash, so one person (or one Wi-Fi) can't make Ohm repeat a sentence.
+ * Patterns count visitors by IP hash, so one person (or one Wi-Fi) repeating a sentence can't make it count more.
  * Situation sightings count browsers, so friends on one Wi-Fi can each teach Ohm what a word goes with.
  */
 export function hear(sql: SqlStorage, lexicon: Lexicon, words: string[], who: Who, now: number, on: Situation[]) {
@@ -131,20 +131,21 @@ export function pickWeighted<T extends { count: number }>(rows: T[], random: () 
 }
 
 /**
- * Continues from one context, or backs off to a shorter one (absolute discounting): every count loses 1, so a
- * pattern with count 1 (one visitor) is never followed, and the context is followed with probability
- * (total − number of rows) / total. The rest goes to the back-off. It also returns that chance and, when Ohm
- * followed, the word's share of the weights: the numbers the site shows in "why".
+ * Continues from one context, or backs off to a shorter one (absolute discounting with D = ½): every count loses
+ * half, so Ohm learns from anyone, like a toddler, but a pattern one visitor typed keeps half a vote and one two
+ * visitors typed has three halves (brain_sim.ipynb, section 10c). The context is followed with probability
+ * (total − rows / 2) / total; the rest goes to the back-off. Counted in halves, 2 × count − 1, so the weights stay
+ * whole numbers for the C++ pick. Also returns that chance and, when Ohm followed, the word's share of the
+ * weights: the numbers the site shows in "why".
  */
 export function follow(rows: Row[], random: () => number) {
-  const n = rows.reduce((sum, r) => sum + r.count, 0);
-  const kept = n - rows.length;
-  const chance = kept > 0 ? kept / n : 0;
+  const weights = rows.map((r) => ({ next: r.next, count: 2 * r.count - 1 }));
+  const kept = weights.reduce((sum, w) => sum + w.count, 0);
+  const chance = kept > 0 ? kept / (kept + rows.length) : 0; // kept + rows = 2 × total
   if (kept <= 0 || random() >= chance) return { chance, followed: false };
-  const pick = pickWeighted(rows.map((r) => ({ next: r.next, count: r.count - 1 })), random)!; // kept > 0, so a weight is > 0
+  const pick = pickWeighted(weights, random)!; // every weight is at least 1
   return { chance, followed: true, word: pick.next, share: pick.count / kept };
 }
-
 /** Any word Ohm knows. A random rowid reads 1 row, where ORDER BY random() would read the whole table. */
 function randomWord(sql: SqlStorage, random: () => number) {
   const top = sql.exec<{ top: number | null }>("SELECT MAX(rowid) AS top FROM words").one().top ?? 0;
@@ -156,8 +157,8 @@ function randomWord(sql: SqlStorage, random: () => number) {
 
 /**
  * The next word, and how Ohm got it: from the last two words, else the last word, else babble. The last word
- * has its own counts (pairs), with the visitor rule. Adding up the triples instead would let through a pair that
- * one visitor typed after two different words ("aku kopi enak", "kamu kopi enak"): brain_sim.ipynb, section 10b.
+ * has its own counts (pairs), with the visitor rule, so a pair one visitor typed after different words ("aku kopi
+ * enak", "kamu kopi enak") still counts once. Adding up the triples would count it twice: brain_sim.ipynb, 10b.
  */
 function nextWord(sql: SqlStorage, mind: Mind, p2: string, p1: string, random: () => number): WhyStep {
   const rungs = [
