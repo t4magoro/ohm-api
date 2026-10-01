@@ -138,7 +138,7 @@ export class Ohm extends DurableObject<Env> {
     const pet = this.load(now);
     if (pet.status === "off") return this.send(ws, { t: "error", msg: "Ohm is off. Reboot it first" });
 
-    const words = tokenize(text);
+    const words = lexicon.normalize(tokenize(text)); // one spelling per word: "gak" → "tidak"
     if (hasBlocked(this.sql, lexicon, words)) {
       return this.send(ws, { t: "error", msg: "Ohm covers its ears. That word isn't allowed" });
     }
