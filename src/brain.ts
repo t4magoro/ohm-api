@@ -1,20 +1,22 @@
 // Ohm's brain: a Markov chain. It counts which word follows which in what visitors type, then talks by
 // repeatedly picking a likely next word. It can only say words it has learned. There are no levels: Ohm
 // babbles where he has no evidence and speaks in sentences where he has. Every rule here was tested in
-// ohm-app/research/brain_sim.ipynb. Word + situation links are in grounding.ts, the skills in mind.ts,
-// the tables in schema.ts; which words are allowed is decided in words.ts.
+// ohm-app/research/brain_sim.ipynb. Word + situation links are in grounding.ts, answers in answers.ts, the skills
+// in mind.ts, the tables in schema.ts; which words are allowed is decided in words.ts.
+import { answerTo, countQuestions, isQuestion, keepAnswer, learnAnswer, quoteFor } from "./answers";
 import { countSighting, linkOf, relink, situationWord } from "./grounding";
 import { bump, loadMind, saveMind, type Mind } from "./mind";
 import type { Brain, Why, WhyStep } from "./protocol";
 import type { Situation } from "./situation";
 import { math } from "./wasm";
-import { hasBlocked, type Lexicon } from "./words";
+import { hasBlocked, squash, type Lexicon } from "./words";
 
 const START = "<s>";
 const END = "</s>";
 const MAX_REPLY = 12; // words in one reply
 const MAX_WEIGHTS = 4096; // must match pet.cpp
 const SITUATION_CHANCE = 0.3; // personality: how often Ohm talks about his situation instead of your topic
+const ASK_CHANCE = 0.25; // personality: how often he asks back when he has no answer for you (brain_sim.ipynb, 18)
 
 type Who = { id: string; name: string; ipHash: string };
 type Row = { next: string; count: number };
@@ -22,14 +24,26 @@ type Row = { next: string; count: number };
 const exists = (sql: SqlStorage, query: string, ...params: string[]) => sql.exec(query, ...params).toArray().length > 0;
 
 /**
- * Ohm hears a message. First it's a test: before learning anything, the skills record how much of it he
- * could have predicted. Then he learns: allowed new words join his vocabulary, unknown words wait in the
- * queue for your approval, word triples and word + situation sightings are counted. One blocked word
- * rejects everything. The visitor rule: a count only goes up when a different visitor than last time typed it.
- * Patterns count visitors by IP hash, so one person (or one Wi-Fi) repeating a sentence can't make it count more.
- * Situation sightings count browsers, so friends on one Wi-Fi can each teach Ohm what a word goes with.
+ * Ohm hears a message, as typed. Every word is stored in one spelling ("gak" → "tidak"), and how it was spelled
+ * is counted, so Ohm can talk like the people he hears (inStyle). First it's a test: before learning anything,
+ * the skills record how much of it he could have predicted. If Ohm just talked to this visitor (`line`), the
+ * message is also an answer to him (answers.ts). Then he learns: allowed new words join his vocabulary, unknown
+ * words wait in the queue for your approval, word triples and word + situation sightings are counted. One
+ * blocked word rejects everything. The visitor rule: a count only goes up when a different visitor than last
+ * time typed it. Patterns count visitors by IP hash, so one person (or one Wi-Fi) repeating a sentence can't make
+ * it count more. Situation sightings and answers count browsers, so friends on one Wi-Fi can each teach Ohm what
+ * a word goes with, and what to answer.
  */
-export function hear(sql: SqlStorage, lexicon: Lexicon, words: string[], who: Who, now: number, on: Situation[]) {
+export function hear(
+  sql: SqlStorage,
+  lexicon: Lexicon,
+  typed: string[],
+  who: Who,
+  now: number,
+  on: Situation[],
+  line: string[] = [],
+) {
+  const words = lexicon.normalize(typed);
   if (hasBlocked(sql, lexicon, words)) return { blocked: true, learned: [] as string[] };
   const mind = loadMind(sql);
 
@@ -46,7 +60,10 @@ export function hear(sql: SqlStorage, lexicon: Lexicon, words: string[], who: Wh
     if (link) bump(mind, "context", on.includes(link));
   }
 
-  // 2. Learn words and triples.
+  // 2. Answers: what this visitor wrote right after Ohm talked to them, also on what he knew before.
+  const cues = line.length > 0 ? learnAnswer(sql, mind, line, words, browser) : [];
+
+  // 3. Learn words and triples.
   const learned: string[] = [];
   const sighted: string[] = [];
   const pieces: string[][] = [[]];
@@ -86,8 +103,18 @@ export function hear(sql: SqlStorage, lexicon: Lexicon, words: string[], who: Wh
     mind.tokens += piece.length;
     mind.ends += 1;
   }
+  // The whole answer too, if Ohm knows every word of it now: he only ever says words he knows.
+  if (cues.length > 0 && words.length > 0 && words.every((w) => lastBy.has(w))) keepAnswer(sql, cues, words, browser, now);
+  countQuestions(mind, words.filter((w) => lastBy.has(w)));
 
-  // 3. Grounding: in which situations each word is said.
+  // 4. Style: how people spell the words that have several spellings, once per browser in a row (like sightings).
+  for (const s of new Set(typed.map(squash))) {
+    if (lexicon.spellings(s).length < 2 || mind.spellBy[s] === browser) continue;
+    mind.spellings[s] = (mind.spellings[s] ?? 0) + 1;
+    mind.spellBy[s] = browser;
+  }
+
+  // 5. Grounding: in which situations each word is said.
   for (const w of sighted) countSighting(sql, mind, w, on);
   for (const w of new Set(sighted)) relink(sql, mind, w);
   saveMind(sql, mind);
@@ -146,6 +173,7 @@ export function follow(rows: Row[], random: () => number) {
   const pick = pickWeighted(weights, random)!; // every weight is at least 1
   return { chance, followed: true, word: pick.next, share: pick.count / kept };
 }
+
 /** Any word Ohm knows. A random rowid reads 1 row, where ORDER BY random() would read the whole table. */
 function randomWord(sql: SqlStorage, random: () => number) {
   const top = sql.exec<{ top: number | null }>("SELECT MAX(rowid) AS top FROM words").one().top ?? 0;
@@ -177,10 +205,8 @@ function nextWord(sql: SqlStorage, mind: Mind, p2: string, p1: string, random: (
   return { word: random() < stop ? END : randomWord(sql, random), tried, stop };
 }
 
-/** Ohm answers, using only words he has learned, and how he built the answer. Null while he knows no words. */
-export function reply(sql: SqlStorage, heard: string[], on: Situation[], random: () => number = Math.random) {
-  if (!exists(sql, "SELECT 1 FROM words LIMIT 1")) return null;
-  const mind = loadMind(sql);
+/** Where Ohm starts when he has no answer for you: your topic, his situation, or a random word. */
+function startWord(sql: SqlStorage, heard: string[], on: Situation[], random: () => number): Why["seed"] {
   // The topic: the rarest word Ohm knows in the message ("kopi", not "aku").
   const marks = heard.map(() => "?").join(",");
   const topic = heard.length
@@ -189,17 +215,35 @@ export function reply(sql: SqlStorage, heard: string[], on: Situation[], random:
     : undefined;
   // Or, sometimes, what's on his mind: the word most clearly tied to his situation right now.
   const felt = situationWord(sql, on);
-  const seed: Why["seed"] =
-    felt && (!topic || random() < SITUATION_CHANCE)
-      ? { ...felt, from: "situation" }
-      : topic
-        ? { word: topic, from: "topic" }
-        : { word: randomWord(sql, random), from: "random" };
+  return felt && (!topic || random() < SITUATION_CHANCE)
+    ? { ...felt, from: "situation" }
+    : topic
+      ? { word: topic, from: "topic" }
+      : { word: randomWord(sql, random), from: "random" };
+}
 
-  const words = [seed.word];
+/**
+ * Ohm answers, using only words he has learned, and how he built the answer. Null while he knows no words.
+ * If your message has a cue he has learned an answer to, he starts from that answer, and says a whole answer
+ * people gave when one fits (answers.ts). If not, and you didn't ask him anything, he sometimes asks you
+ * something back. `words` is what he said in stored spellings, for learning from your answer to it.
+ */
+export function reply(sql: SqlStorage, heard: string[], on: Situation[], random: () => number = Math.random) {
+  if (!exists(sql, "SELECT 1 FROM words LIMIT 1")) return null;
+  const mind = loadMind(sql);
+  const link = answerTo(sql, heard);
+  const questions = Object.entries(mind.questions).map(([next, count]) => ({ next, count }));
+  const seed: Why["seed"] = link
+    ? { word: link.answer, from: "answer", cue: link.cue, lift: link.lift }
+    : questions.length > 0 && !isQuestion(heard) && random() < ASK_CHANCE
+      ? { word: pickWeighted(questions, random)!.next, from: "ask" }
+      : startWord(sql, heard, on, random);
+
+  const quote = link && quoteFor(sql, link);
+  const words = quote ? quote.text.split(" ") : [seed.word];
   const steps: WhyStep[] = [];
   let [p2, p1] = [START, seed.word];
-  while (words.length < MAX_REPLY) {
+  while (!quote && words.length < MAX_REPLY) {
     const step = nextWord(sql, mind, p2, p1, random);
     steps.push(step);
     bump(mind, "sentences", step.stop === undefined); // the skill: how much of what Ohm says follows a pattern people taught him
@@ -209,9 +253,24 @@ export function reply(sql: SqlStorage, heard: string[], on: Situation[], random:
   }
   for (const w of new Set(words)) sql.exec("UPDATE words SET said = said + 1 WHERE word = ?", w);
   saveMind(sql, mind);
-  const babbleOnly = steps.every((s) => s.stop !== undefined);
-  const why: Why = { on, seed, steps };
-  return { text: babbleOnly ? `${words.join(" ")} beep` : words.join(" "), why };
+  const babbleOnly = !quote && steps.every((s) => s.stop !== undefined);
+  const why: Why = quote ? { on, seed, steps, quote: { words, times: quote.n } } : { on, seed, steps };
+  return { text: babbleOnly ? `${words.join(" ")} beep` : words.join(" "), words, why };
+}
+
+/** A reply in the spellings most people use with Ohm: "gak" if most write "gak", "tidak" if most write "tidak". */
+export function inStyle<T extends { text: string; why: Why }>(sql: SqlStorage, lexicon: Lexicon, said: T): T {
+  const { spellings } = loadMind(sql);
+  const say = (w: string) => lexicon.spellings(w).reduce((a, b) => ((spellings[b] ?? 0) > (spellings[a] ?? 0) ? b : a));
+  const sayAll = (text: string) => text.split(" ").map(say).join(" ");
+  const { seed, steps, quote } = said.why;
+  const why: Why = {
+    ...said.why,
+    seed: seed.cue ? { ...seed, word: say(seed.word), cue: sayAll(seed.cue) } : { ...seed, word: say(seed.word) },
+    steps: steps.map((s) => ({ ...s, word: say(s.word) })),
+  };
+  if (quote) why.quote = { ...quote, words: quote.words.map(say) };
+  return { ...said, text: sayAll(said.text), why };
 }
 
 /** Vocabulary size and words per language, for the Spellbook. */

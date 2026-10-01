@@ -70,7 +70,15 @@ const STEPS: string[][] = [
      SELECT p1, next, MAX(count), last_by FROM grams WHERE p1 <> '<s>' AND last_by IS NOT NULL GROUP BY p1, next
      ON CONFLICT (p1, next) DO UPDATE SET count = MAX(pairs.count, excluded.count)`,
   ],
-
+  // 9: conversation (answers.ts). Each cue (a word or word pair of Ohm's line) counts its exchanges and keeps its
+  // clearest answer word; answered counts how often each word was an answer; cue_words counts cue + answer word
+  // with the visitor rule; answers keeps whole answers, up to 20 per cue.
+  [
+    "CREATE TABLE IF NOT EXISTS answered (word TEXT PRIMARY KEY, n INTEGER) WITHOUT ROWID",
+    "CREATE TABLE IF NOT EXISTS cues (cue TEXT PRIMARY KEY, n INTEGER, answer TEXT, g2 REAL, lift REAL) WITHOUT ROWID",
+    "CREATE TABLE IF NOT EXISTS cue_words (cue TEXT, answer TEXT, n INTEGER, last_by TEXT, PRIMARY KEY (cue, answer)) WITHOUT ROWID",
+    "CREATE TABLE IF NOT EXISTS answers (cue TEXT, text TEXT, n INTEGER, last_by TEXT, at INTEGER, PRIMARY KEY (cue, text)) WITHOUT ROWID",
+  ],
 ];
 
 export function migrate(sql: SqlStorage) {
