@@ -43,9 +43,8 @@ export type Counts = (typeof MILESTONES)[number]["counts"];
 
 /**
  * How Ohm chose one word of a reply. He tries the last two words ("pair"), then the last word ("word"):
- * `chance` is how often he follows what people taught there, (total − rows) / total. The rung he followed
- * made the word, with `share` = its weight (count − 1) / all weights there. If he followed none, he babbled:
- * stopped with chance `stop`, or said a random word he knows. "</s>" = he stopped here.
+ * `chance` is how often he follows what people taught there, (total − rows / 2) / total. The rung he followed
+ * made the word, with `share` = its weight (count − ½) / all weights there. If he followed none, he babbled: * stopped with chance `stop`, or said a random word he knows. "</s>" = he stopped here.
  * The line's text can add "zzz…" (asleep) or "beep" (all babble), so build the words from `seed` and `steps`.
  */
 export type WhyStep = {

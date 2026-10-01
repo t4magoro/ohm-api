@@ -69,7 +69,7 @@ flowchart LR
 Ohm replies **before** it learns from the message. Done the other way round, a sentence full of brand-new
 words would be the only path the chain knows, and it would come straight back out to everyone online.
 Visitors' messages are never stored as sentences or shown to others: only single words and counts are kept,
-and only Ohm's replies are broadcast.
+and only Ohm's replies are broadcast. Those replies can repeat what one visitor typed, word for word (section 4).
 
 ### 3. Learning: words, triples and the visitor rule
 
@@ -105,25 +105,28 @@ Ohm never learns that `kopi` follows `suka` from a sentence it didn't fully unde
 ### 4. No levels: trust grows with evidence
 
 To pick the next word, Ohm looks at the **last two words** (the triple), else the **last word** (the pair),
-else it **babbles**. Each step uses *absolute discounting*: every count loses 1.
+else it **babbles**. Each step uses *absolute discounting* with D = ½: every count loses half.
 
 Example: Rina and Budi typed `aku suka kopi`, Citra typed `aku suka teh`. After `aku suka`:
 
-| next | count | count − 1 |
+| next | count | count − ½ (weight) |
 |---|---|---|
-| kopi | 2 | 1 |
-| teh | 1 | 0 |
+| kopi | 2 | 1½ |
+| teh | 1 | ½ |
 
-The total is 3 and there are 2 rows, so Ohm follows this context (3 − 2) / 3 = **1 time in 3**, and then always
-says kopi. The other 2 times it backs off to the last word only. **Teh, typed by one visitor, is never picked
-from a pattern.** That's the privacy rule: Ohm doesn't repeat what only one person typed. A context he has
-seen a lot is followed almost always, so real sentences appear by themselves as the counts grow.
-**Why pairs have their own counts.** Adding up the triples that end in a word would let through a pair that
-only one visitor typed, after two different words: e.g Rina typing `aku kopi enak` and `kamu kopi enak` adds up to
-2 for `kopi enak`. In the simulation (notebook section 10b) that happened in 0.6% of replies. Counting pairs
-with the visitor rule fixes it without making Ohm babble more (pure-babble replies at day 30: 23.0% ± 3.6%,
-against 22.6% ± 3.1% before), for about 3 more row writes per message.
+The total is 3 and there are 2 rows, so Ohm follows this context (3 − 1) / 3 = **2 times in 3**, and then says
+kopi 3 times in 4 and teh 1 time in 4. The other time in 3 he backs off to the last word only.
 
+**Ohm learns like a toddler: from anyone.** A sentence one visitor typed has half a vote, so Ohm can say it, but
+what two people said weighs three times as much, and repeating something never counts twice (the visitor rule).
+In the simulation (notebook section 10c) this cut pure-babble replies from 23% to 4% at day 30 (35% to 6% at
+day 7). The price: about 59% of replies contain a word pair only one person ever typed, so anything typed can
+come back to everyone. Before, Ohm used D = 1 and never followed one visitor's pattern (section 10).
+
+**Why pairs have their own counts.** Adding up the triples that end in a word would count a pair one visitor
+typed after two different words twice: Rina typing `aku kopi enak` and `kamu kopi enak` would add up to 2 for
+`kopi enak`. Counting pairs with the visitor rule keeps it at one visitor (notebook section 10b), for about 3
+more row writes per message.
 **Babble** stops as often as real sentences end (`ends / (tokens + ends)`), otherwise it says any known word
 (a random rowid: 1 row read). A reply made only of babble ends with `beep`.
 
@@ -162,9 +165,9 @@ live `line` message for the site's "think" button:
   he babbled, his chance to stop.
 
 The numbers are exactly the ones Ohm used, from rows he had already read: no extra request, no extra row read.
-`why` is never stored, so lines that come with the page have none. It only names words Ohm said, and a pattern
-only one visitor typed has weight 0, so it can never be picked. Two things it does tell everyone: a chance shows
-how many *different* things people said after those words (never what), and a topic seed was in your message.
+`why` is never stored, so lines that come with the page have none. It only names words Ohm said. Two things it
+does tell everyone: a chance shows how many *different* things people said after those words (never what), and a
+topic seed was in your message.
 ### 7. Skills: the brain level, measured
 
 Every message is scored **before** Ohm learns from it, so each one is a fair test. A skill is the average of
@@ -183,18 +186,18 @@ his words from patterns. Pats only move the meter: letting them change the count
 measurable (+1) or made Ohm copy himself (+5).
 ### 8. The weighted pick, in C++
 
-`pickWeighted` (TypeScript) writes the weights (count − 1) into a fixed buffer inside the WebAssembly memory
-(`weights_ptr`, at most 4096 values, so there's no heap). Then it calls `pick_weighted(n, r)`, with `r` a
-random number in [0, 1):
+`pickWeighted` (TypeScript) writes the weights into a fixed buffer inside the WebAssembly memory (`weights_ptr`,
+at most 4096 values, so there's no heap). They're counted in halves, 2 × count − 1, so they stay whole numbers.
+Then it calls `pick_weighted(n, r)`, with `r` a random number in [0, 1):
 
 ```
-weights = [2, 1]  (kopi, teh)    total = 3
-r = 0.4 → x = 1.2 → 1.2 − 2 < 0  → index 0 → kopi
-r = 0.8 → x = 2.4 → 2.4 − 2 = 0.4 → 0.4 − 1 < 0 → index 1 → teh
+weights = [3, 1]  (kopi: 2 visitors, teh: 1)    total = 4
+r = 0.5 → x = 2.0 → 2.0 − 3 < 0  → index 0 → kopi
+r = 0.9 → x = 3.6 → 3.6 − 3 = 0.6 → 0.6 − 1 < 0 → index 1 → teh
 ```
 
 Think of it as a line of length `total`, cut into pieces as long as each weight. `r` points somewhere on the
-line, and the piece it lands in wins. A weight of 0 has no piece, so it's never picked.
+line, and the piece it lands in wins.
 
 ### 9. Moderation hooks
 
@@ -205,11 +208,14 @@ line, and the piece it lands in wins. A weight of 0 has no piece, so it's never 
 
 ### Known limitations
 
-- **One IP, one visitor for sentences.** People behind the same IP (one Wi-Fi, some mobile networks) can teach
-  situations (each browser counts) but count as one visitor for sentences. Locally, all your tabs share one IP:
-  Ohm will mostly babble.
-- **Browsers are easy to fake.** One person with several browsers can fake or move situation links (never
-  sentences): the price of letting one Wi-Fi teach situations. The 10 s chat cooldown is per IP.- **Two people can still agree on a sentence.** The visitor rule stops one troll, not two.
+- **Ohm can repeat what one person typed.** He learns like a toddler (section 4), so a sentence one visitor typed
+  can come back, word for word, to everyone. The chat says so, and moderation (block, report, ban) is the safety
+  net. Only words from the word lists or approved by the admin are ever learned, and never numbers.
+- **One IP, one visitor for sentences.** People behind the same IP (one Wi-Fi, some mobile networks) count as one
+  visitor for sentences: together they get half a vote, like one person. They can each teach situations (each
+  browser counts).
+- **Browsers are easy to fake.** One person with several browsers can fake or move situation links: the price of
+  letting one Wi-Fi teach situations. The 10 s chat cooldown is per IP. on a sentence.** The visitor rule stops one troll, not two.
 - **One link per word, and confounds.** In the simulation `panas` got linked to `siang`, because hot hours are
   midday hours.
 - **Rare situations learn slowly.** `reboot` almost never happens, so its words may never get a link.

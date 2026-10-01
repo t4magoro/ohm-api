@@ -62,6 +62,14 @@ const STEPS: string[][] = [
     "CREATE TABLE IF NOT EXISTS pairs (p1 TEXT, next TEXT, count INTEGER, last_by TEXT, PRIMARY KEY (p1, next)) WITHOUT ROWID",
     "DROP INDEX IF EXISTS grams_p1_next",
   ],
+  // 8: rebuild the pairs from the triples Ohm already had, so he keeps what he learned before step 7. Each pair
+  // gets its best triple's count: a lower bound on how many visitors typed it, so it never counts one person
+  // twice. And that triple's last_by: always someone who really typed the pair. Pairs learned since keep theirs.
+  [
+    `INSERT INTO pairs (p1, next, count, last_by)
+     SELECT p1, next, MAX(count), last_by FROM grams WHERE p1 <> '<s>' AND last_by IS NOT NULL GROUP BY p1, next
+     ON CONFLICT (p1, next) DO UPDATE SET count = MAX(pairs.count, excluded.count)`,
+  ],
 
 ];
 
