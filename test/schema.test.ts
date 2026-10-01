@@ -10,12 +10,21 @@ describe("migrate", () => {
     old.exec("INSERT INTO events (at, type, who_id, who_name) VALUES (1, 'charge', 'x', 'IQBAL')");
     migrate(old);
     expect(old.exec("SELECT who_name, detail FROM events").one()).toEqual({ who_name: "IQBAL", detail: null });
-    expect(old.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "5" });
+    expect(old.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "6" });
   });
 
   it("runs each step once, so running it again changes nothing", () => {
     const sql = testSql(); // testSql() already migrated once
     migrate(sql);
-    expect(sql.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "5" });
-  });
+    expect(sql.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "6" });
+ });
+
+  it("step 6 drops the links that rest on one sighting", () => {
+    const sql = testSql();
+    sql.exec("INSERT INTO word_ctx (word, situation, n) VALUES ('hujan', 'rain', 2), ('rahasia', 'malam', 1)");
+    sql.exec("INSERT INTO links (word, situation, g2, lift) VALUES ('hujan', 'rain', 15, 16), ('rahasia', 'malam', 11, 30)");
+    sql.exec("UPDATE kv SET value = '5' WHERE key = 'schema'"); // like the live Ohm, which stopped at step 5
+    migrate(sql);
+    expect(sql.exec("SELECT word FROM links").toArray()).toEqual([{ word: "hujan" }]);
+  });    
 });

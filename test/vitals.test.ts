@@ -132,16 +132,11 @@ describe("vitals", () => {
     expect(v.snapshots.map((s) => s.skills)).toEqual([skills, null]);
   });
 
-  it("lists the strongest links, only for words two different visitors used", () => {
-    for (const [w, seen] of [["hujan", 3], ["panas", 2], ["rahasia", 1]] as const) {
-      sql.exec("INSERT INTO words (word, langs, by_id, by_name, at, uses, seen) VALUES (?, 'id', 'v', 'Rina', ?, 1, ?)", w, T0, seen);
-    }
-    sql.exec("INSERT INTO links (word, situation, g2, lift) VALUES ('hujan', 'rain', 30, 4), ('panas', 'hot', 12, 6), ('rahasia', 'malam', 50, 9)");
+    it("lists the strongest links first, at most 12", () => {
+    for (let i = 0; i < 14; i++) sql.exec("INSERT INTO links (word, situation, g2, lift) VALUES (?, 'rain', ?, 2)", `w${i}`, 20 + i);
     const v = vitals(sql, standing(newPet(T0, SUNNY), 3, T0), [], BRAIN, T0);
-    expect(v.links).toEqual([
-      { word: "hujan", situation: "rain", lift: 4 },
-      { word: "panas", situation: "hot", lift: 6 },
-    ]);
+    expect(v.links.map((l) => l.word)).toEqual(Array.from({ length: 12 }, (_, i) => `w${13 - i}`));
+    expect(v.links[0]).toEqual({ word: "w13", situation: "rain", lift: 2 });
   });
 });
 

@@ -25,28 +25,26 @@ const exists = (sql: SqlStorage, query: string, ...params: string[]) => sql.exec
  * Ohm hears a message. First it's a test: before learning anything, the skills record how much of it he
  * could have predicted. Then he learns: allowed new words join his vocabulary, unknown words wait in the
  * queue for your approval, word triples and word + situation sightings are counted. One blocked word
- * rejects everything. The visitor rule: a count only goes up when a different visitor than last time typed
- * it. So a pattern with count 2+ was typed by at least two people, and one troll can't pump the counts.
+ * rejects everything. The visitor rule: a count only goes up when a different visitor than last time typed it.
+ * Patterns count visitors by IP hash, so one person (or one Wi-Fi) can't make Ohm repeat a sentence.
+ * Situation sightings count browsers, so friends on one Wi-Fi can each teach Ohm what a word goes with.
  */
 export function hear(sql: SqlStorage, lexicon: Lexicon, words: string[], who: Who, now: number, on: Situation[]) {
   if (hasBlocked(sql, lexicon, words)) return { blocked: true, learned: [] as string[] };
   const mind = loadMind(sql);
 
   // 1. The test, on what Ohm knew before this message.
-  const lastBy = new Map<string, string | null>(); // known word → the visitor who last counted for it
+  const browser = who.id || who.ipHash; // a socket that never said hello counts as its IP
+  const lastBy = new Map<string, string | null>(); // known word → the browser whose sighting last counted
   for (const w of new Set(words)) {
     const row = sql.exec<{ seen_by: string | null }>("SELECT seen_by FROM words WHERE word = ?", w).toArray()[0];
     if (row) lastBy.set(w, row.seen_by);
   }
-  words.forEach((w, i) => {
+  for (const w of words) {
     bump(mind, "words", lastBy.has(w));
-    const prev = words[i - 1];
-    if (i > 0 && lastBy.has(prev) && lastBy.has(w)) {
-      bump(mind, "sentences", exists(sql, "SELECT 1 FROM grams WHERE p1 = ? AND next = ? LIMIT 1", prev, w));
-    }
     const link = lastBy.has(w) ? linkOf(sql, w) : undefined;
     if (link) bump(mind, "context", on.includes(link));
-  });
+  }
 
   // 2. Learn words and triples.
   const learned: string[] = [];
@@ -54,8 +52,8 @@ export function hear(sql: SqlStorage, lexicon: Lexicon, words: string[], who: Wh
   const pieces: string[][] = [[]];
   for (const w of words) {
     if (lastBy.has(w)) {
-      const counts = lastBy.get(w) !== who.ipHash;
-      sql.exec("UPDATE words SET uses = uses + 1, seen = seen + ?, seen_by = ? WHERE word = ?", counts ? 1 : 0, who.ipHash, w);
+      const counts = lastBy.get(w) !== browser;
+      sql.exec("UPDATE words SET uses = uses + 1, seen = seen + ?, seen_by = ? WHERE word = ?", counts ? 1 : 0, browser, w);
       if (counts) sighted.push(w);
     } else if (lexicon.langsOf(w).length > 0) {
       sql.exec(
@@ -66,7 +64,7 @@ export function hear(sql: SqlStorage, lexicon: Lexicon, words: string[], who: Wh
         who.name,
         who.ipHash,
         now,
-        who.ipHash,
+        browser,
       );
       learned.push(w);
       sighted.push(w);
@@ -79,7 +77,7 @@ export function hear(sql: SqlStorage, lexicon: Lexicon, words: string[], who: Wh
       pieces.push([]); // never link two words across one Ohm doesn't know
       continue;
     }
-    lastBy.set(w, who.ipHash);
+    lastBy.set(w, browser);
     pieces.at(-1)!.push(w);
   }
   for (const piece of pieces) {
@@ -182,11 +180,13 @@ export function reply(sql: SqlStorage, heard: string[], on: Situation[], random:
   while (words.length < MAX_REPLY) {
     const { word, babble } = nextWord(sql, mind, p2, p1, random);
     babbleOnly &&= babble;
+    bump(mind, "sentences", !babble); // the skill: how much of what Ohm says follows a pattern people taught him
     if (word === END) break;
     words.push(word);
     [p2, p1] = [p1, word];
   }
   for (const w of new Set(words)) sql.exec("UPDATE words SET said = said + 1 WHERE word = ?", w);
+  saveMind(sql, mind);
   return babbleOnly ? `${words.join(" ")} beep` : words.join(" ");
 }
 
@@ -197,5 +197,5 @@ export function brainStats(sql: SqlStorage): Omit<Brain, "skills"> {
       "SELECT COUNT(*) AS vocab, SUM(langs LIKE '%id%') AS id, SUM(langs LIKE '%en%') AS en FROM words",
     )
     .one();
-    return { vocab: row.vocab, langs: { id: { words: row.id ?? 0 }, en: { words: row.en ?? 0 } } };
+  return { vocab: row.vocab, langs: { id: { words: row.id ?? 0 }, en: { words: row.en ?? 0 } } };
 }

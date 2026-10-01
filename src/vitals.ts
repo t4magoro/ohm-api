@@ -107,7 +107,7 @@ export function vitals(sql: SqlStorage, s: Record<Counts, number>, unlocked: Mil
           skill_words === null
             ? null
             : { words: skill_words, sentences: skill_sentences!, context: skill_context!, expression: skill_expression! },
-      })),    hours,
+      })),hours,
     growth: sql
       .exec<{ day: string; words: number }>(
         `SELECT date((at + ${BANDUNG}) / 1000, 'unixepoch') AS day, COUNT(*) AS words FROM words GROUP BY day ORDER BY day`,
@@ -118,17 +118,12 @@ export function vitals(sql: SqlStorage, s: Record<Counts, number>, unlocked: Mil
         `SELECT word, uses, said, by_name AS "by" FROM words ORDER BY uses DESC, said DESC LIMIT 10`,
       )
       .toArray(),
-    // Only words that two different visitors used (seen >= 2 needs a second, different visitor: see brain.ts),
-    // so this public list never rests on what just one person typed.
+    // Every link rests on 2+ sightings in its situation from different browsers (grounding.ts).
     links: sql
-      .exec<Vitals["links"][number]>(
-        `SELECT l.word, l.situation, l.lift FROM links l JOIN words w ON w.word = l.word
-         WHERE w.seen >= 2 ORDER BY l.g2 DESC LIMIT ${LINKS_SHOWN}`,
-      )
-      .toArray(),
-    milestones: progress(sql, s, unlocked, now),
+      .exec<Vitals["links"][number]>(`SELECT word, situation, lift FROM links ORDER BY g2 DESC LIMIT ${LINKS_SHOWN}`)
+      .toArray(),    milestones: progress(sql, s, unlocked, now),
     brain,
-    now,
+    now,  
   };
 }
 
