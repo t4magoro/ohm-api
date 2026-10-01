@@ -61,13 +61,13 @@ export function relink(sql: SqlStorage, mind: Mind, word: string) {
 export const linkOf = (sql: SqlStorage, word: string) =>
   sql.exec<{ situation: Situation }>("SELECT situation FROM links WHERE word = ?", word).toArray()[0]?.situation;
 
-/** The word most clearly tied to what's on right now, if Ohm has one. */
+/** The word most clearly tied to what's on right now, if Ohm has one, with its situation and lift. */
 export function situationWord(sql: SqlStorage, on: Situation[]) {
   if (on.length === 0) return undefined;
   return sql
-    .exec<{ word: string }>(
-      `SELECT word FROM links WHERE situation IN (${on.map(() => "?").join(",")}) ORDER BY g2 DESC LIMIT 1`,
+    .exec<{ word: string; situation: Situation; lift: number }>(
+      `SELECT word, situation, lift FROM links WHERE situation IN (${on.map(() => "?").join(",")}) ORDER BY g2 DESC LIMIT 1`,
       ...on,
     )
-    .toArray()[0]?.word;
+    .toArray()[0];
 }

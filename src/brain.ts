@@ -5,7 +5,7 @@
 // the tables in schema.ts; which words are allowed is decided in words.ts.
 import { countSighting, linkOf, relink, situationWord } from "./grounding";
 import { bump, loadMind, saveMind, type Mind } from "./mind";
-import type { Brain } from "./protocol";
+import type { Brain, Why, WhyStep } from "./protocol";
 import type { Situation } from "./situation";
 import { math } from "./wasm";
 import { hasBlocked, type Lexicon } from "./words";
@@ -120,6 +120,7 @@ function learnPatterns(sql: SqlStorage, words: string[], ipHash: string) {
     );
   }
 }
+
 /** Picks a row with probability proportional to its count. The picking itself runs in C++. */
 export function pickWeighted<T extends { count: number }>(rows: T[], random: () => number): T | undefined {
   const n = Math.min(rows.length, MAX_WEIGHTS);
@@ -130,15 +131,18 @@ export function pickWeighted<T extends { count: number }>(rows: T[], random: () 
 }
 
 /**
- * Continues from one context, or returns undefined to back off to a shorter one (absolute discounting):
- * every count loses 1, so a pattern with count 1 (one visitor) is never followed, and the context is
- * followed with probability (total − number of rows) / total. The rest goes to the back-off.
+ * Continues from one context, or backs off to a shorter one (absolute discounting): every count loses 1, so a
+ * pattern with count 1 (one visitor) is never followed, and the context is followed with probability
+ * (total − number of rows) / total. The rest goes to the back-off. It also returns that chance and, when Ohm
+ * followed, the word's share of the weights: the numbers the site shows in "why".
  */
-export function follow(rows: Row[], random: () => number): string | undefined {
+export function follow(rows: Row[], random: () => number) {
   const n = rows.reduce((sum, r) => sum + r.count, 0);
   const kept = n - rows.length;
-  if (kept <= 0 || random() >= kept / n) return undefined;
-  return pickWeighted(rows.map((r) => ({ next: r.next, count: r.count - 1 })), random)?.next;
+  const chance = kept > 0 ? kept / n : 0;
+  if (kept <= 0 || random() >= chance) return { chance, followed: false };
+  const pick = pickWeighted(rows.map((r) => ({ next: r.next, count: r.count - 1 })), random)!; // kept > 0, so a weight is > 0
+  return { chance, followed: true, word: pick.next, share: pick.count / kept };
 }
 
 /** Any word Ohm knows. A random rowid reads 1 row, where ORDER BY random() would read the whole table. */
@@ -151,24 +155,29 @@ function randomWord(sql: SqlStorage, random: () => number) {
 }
 
 /**
- * The next word: from the last two words, else the last word, else babble. The last word has its own
- * counts (pairs), with the visitor rule. Adding up the triples instead would let through a pair that one
- * visitor typed after two different words ("aku kopi enak", "kamu kopi enak"): brain_sim.ipynb, section 10b.
+ * The next word, and how Ohm got it: from the last two words, else the last word, else babble. The last word
+ * has its own counts (pairs), with the visitor rule. Adding up the triples instead would let through a pair that
+ * one visitor typed after two different words ("aku kopi enak", "kamu kopi enak"): brain_sim.ipynb, section 10b.
  */
-function nextWord(sql: SqlStorage, mind: Mind, p2: string, p1: string, random: () => number) {
-  const tri = sql
-    .exec<Row>(`SELECT next, count FROM grams WHERE p2 = ? AND p1 = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, p2, p1)
-    .toArray();
-  const pair = () =>
-    sql.exec<Row>(`SELECT next, count FROM pairs WHERE p1 = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, p1).toArray();
-  const word = follow(tri, random) ?? follow(pair(), random);  if (word) return { word, babble: false };
+function nextWord(sql: SqlStorage, mind: Mind, p2: string, p1: string, random: () => number): WhyStep {
+  const rungs = [
+    ["pair", `SELECT next, count FROM grams WHERE p2 = ? AND p1 = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, [p2, p1]],
+    ["word", `SELECT next, count FROM pairs WHERE p1 = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, [p1]],
+  ] as const;
+  const tried: WhyStep["tried"] = [];
+  for (const [rung, query, params] of rungs) {
+    const { chance, followed, word, share } = follow(sql.exec<Row>(query, ...params).toArray(), random);
+    tried.push({ rung, chance, followed });
+    if (word) return { word, tried, share };
+  }
   // Babble: stop as often as real sentences end, otherwise say any word Ohm knows.
   const heard = mind.tokens + mind.ends;
-  return { word: random() < (heard ? mind.ends / heard : 1) ? END : randomWord(sql, random), babble: true };
+  const stop = heard ? mind.ends / heard : 1;
+  return { word: random() < stop ? END : randomWord(sql, random), tried, stop };
 }
 
-/** Ohm answers, using only words he has learned. Returns null while he knows no words at all. */
-export function reply(sql: SqlStorage, heard: string[], on: Situation[], random: () => number = Math.random): string | null {
+/** Ohm answers, using only words he has learned, and how he built the answer. Null while he knows no words. */
+export function reply(sql: SqlStorage, heard: string[], on: Situation[], random: () => number = Math.random) {
   if (!exists(sql, "SELECT 1 FROM words LIMIT 1")) return null;
   const mind = loadMind(sql);
   // The topic: the rarest word Ohm knows in the message ("kopi", not "aku").
@@ -179,22 +188,29 @@ export function reply(sql: SqlStorage, heard: string[], on: Situation[], random:
     : undefined;
   // Or, sometimes, what's on his mind: the word most clearly tied to his situation right now.
   const felt = situationWord(sql, on);
-  const seed = felt && (!topic || random() < SITUATION_CHANCE) ? felt : (topic ?? randomWord(sql, random));
+  const seed: Why["seed"] =
+    felt && (!topic || random() < SITUATION_CHANCE)
+      ? { ...felt, from: "situation" }
+      : topic
+        ? { word: topic, from: "topic" }
+        : { word: randomWord(sql, random), from: "random" };
 
-  const words = [seed];
-  let babbleOnly = true;
-  let [p2, p1] = [START, seed];
+  const words = [seed.word];
+  const steps: WhyStep[] = [];
+  let [p2, p1] = [START, seed.word];
   while (words.length < MAX_REPLY) {
-    const { word, babble } = nextWord(sql, mind, p2, p1, random);
-    babbleOnly &&= babble;
-    bump(mind, "sentences", !babble); // the skill: how much of what Ohm says follows a pattern people taught him
-    if (word === END) break;
-    words.push(word);
-    [p2, p1] = [p1, word];
+    const step = nextWord(sql, mind, p2, p1, random);
+    steps.push(step);
+    bump(mind, "sentences", step.stop === undefined); // the skill: how much of what Ohm says follows a pattern people taught him
+    if (step.word === END) break;
+    words.push(step.word);
+    [p2, p1] = [p1, step.word];
   }
   for (const w of new Set(words)) sql.exec("UPDATE words SET said = said + 1 WHERE word = ?", w);
   saveMind(sql, mind);
-  return babbleOnly ? `${words.join(" ")} beep` : words.join(" ");
+  const babbleOnly = steps.every((s) => s.stop !== undefined);
+  const why: Why = { on, seed, steps };
+  return { text: babbleOnly ? `${words.join(" ")} beep` : words.join(" "), why };
 }
 
 /** Vocabulary size and words per language, for the Spellbook. */
