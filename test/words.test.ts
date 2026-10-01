@@ -26,6 +26,25 @@ describe("tokenize", () => {
   });
 });
 
+describe("normalize", () => {
+  // The word lists are sorted by use. Here "tidak" ranks above "gak", so Ohm says "tidak".
+  const lexicon = makeLexicon({ id: "aku\ntidak\nbanget\ngak", en: "" }, "badword");
+
+  it("folds chat spellings into the one that ranks highest", () => {
+    expect(lexicon.normalize(["gak", "nggak", "bgt", "tidak"])).toEqual(["tidak", "tidak", "banget", "tidak"]);
+    expect(makeLexicon({ id: "gak\ntidak", en: "" }, "").normalize(["tidak"])).toEqual(["gak"]); // whichever ranks higher
+  });
+
+  it("squashes stretched letters", () => {
+    expect(lexicon.normalize(tokenize("IYAAA bangettt kopiii"))).toEqual(["iya", "banget", "kopi"]);
+  });
+
+  it("stretching a blocked word doesn't hide it", () => {
+    expect(hasBlocked(testSql(), lexicon, lexicon.normalize(tokenize("badwordddd")))).toBe(true);
+  });
+});
+
+
 describe("hasBlocked", () => {
   // "badword" stands in for a real blocked word.
   const lexicon = makeLexicon({ id: "aku", en: "" }, "badword");
