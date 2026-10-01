@@ -50,6 +50,11 @@ const STEPS: string[][] = [
     "ALTER TABLE snapshots ADD COLUMN skill_context REAL",
     "ALTER TABLE snapshots ADD COLUMN skill_expression REAL",
   ],
+  // 6: a link now needs 2+ sightings in its situation (grounding.ts). Drop the links made before that rule.
+  [
+    `DELETE FROM links WHERE NOT EXISTS (
+       SELECT 1 FROM word_ctx c WHERE c.word = links.word AND c.situation = links.situation AND c.n >= 2)`,
+  ],
 ];
 
 export function migrate(sql: SqlStorage) {

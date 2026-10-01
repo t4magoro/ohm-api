@@ -94,9 +94,8 @@ start marker `<s>` and an end marker `</s>`, and stored in `grams (p2, p1, next,
 ```
 
 **The visitor rule:** a count only goes up when a **different visitor** (salted IP hash) than last time typed
-it. `last_by` remembers who raised it last. So count 2 means "at least two different people typed this", and
-one person repeating a sentence 30 times still counts once.
-
+it. `last_by` remembers who raised it last. So count 2 means "typed from at least two different internet
+connections", and one person repeating a sentence 30 times still counts once.
 **Unknown words cut the chain.** "aku suka xyzzy kopi" is learned as two pieces, `aku suka` and `kopi`, so
 Ohm never learns that `kopi` follows `suka` from a sentence it didn't fully understand.
 
@@ -126,10 +125,11 @@ seen a lot is followed almost always, so real sentences appear by themselves as 
 `malam`), `rain`, `hot` (above 30 °C), `battery_low` (below 50), `mood_low` (below 30), and `charge`/`play`/
 `reboot` if *this* visitor did that in the last minute.
 
-Each word sighting (visitor rule again) is counted per situation in `word_ctx (word, situation, n)`, with the
-totals in the mind. A word gets a **link** (`links`) to the situation it's most clearly tied to, if Dunning's
-**G²** says it's no coincidence (G² ≥ 10.83, p < 0.001) and the situation is more likely when the word is said.
-G² compares a 2×2 table: this word or not × situation on or off.
+Each word sighting is counted per situation in `word_ctx (word, situation, n)`, with the totals in the mind.
+Here the visitor rule counts **browsers** (the random visitor ID the site keeps), not IPs, so friends on one
+Wi-Fi can each teach Ohm what a word goes with. A word gets a **link** (`links`) to the situation it's most
+clearly tied to, if Dunning's **G²** says it's no coincidence (G² ≥ 10.83, p < 0.001), the situation is more
+likely when the word is said, and at least two different browsers said it there.G² compares a 2×2 table: this word or not × situation on or off.
 
 Example: ten visitors chat in the dry (30 sightings). One visitor says `hujan` in the rain: G² = 8.8, which
 could be chance, so no link. A second visitor says it: G² = 15.0, so **hujan → rain**. The Wilson rule from the first
@@ -154,14 +154,14 @@ about the last 100 observations (`s ← s + (hit − s) / 100`), from 0 to 1:
 | Skill | One observation | Hit when |
 |---|---|---|
 | words | each word in a message | Ohm already knew it |
-| sentences | each pair of known words | Ohm had seen that pair in that order |
+| sentences | each word Ohm says | it came from a pattern people taught him, not from babble |
 | context | each word with a link | its situation is on right now |
 | expression | a pat or frown on Ohm's reply (`rate`, only by the visitor he answered, once) | it's a pat |
 
-They're in `/state` as `brain.skills` and in the hourly snapshots. The old `level` fields stay until the site
-shows the skills. Pats only move the meter: in the simulation, letting them change the counts either did
-nothing measurable (+1) or made Ohm copy himself (+5).
-
+They're in `/state` as `brain.skills` and in the hourly snapshots. Sentences is measured on what Ohm *says*:
+in the simulation, "has Ohm heard this pair?" showed 84% even on one shared Wi-Fi, where Ohm only said 18% of
+his words from patterns. Pats only move the meter: letting them change the counts either did nothing
+measurable (+1) or made Ohm copy himself (+5).
 ### 8. The weighted pick, in C++
 
 `pickWeighted` (TypeScript) writes the weights (count − 1) into a fixed buffer inside the WebAssembly memory
@@ -186,9 +186,11 @@ line, and the piece it lands in wins. A weight of 0 has no piece, so it's never 
 
 ### Known limitations
 
-- **One IP, one visitor.** People behind the same IP (one Wi-Fi, some mobile networks) count as one visitor,
-  so they teach more slowly. Locally, all your tabs are one visitor: Ohm will mostly babble.
-- **Two people can still agree on a sentence.** The visitor rule stops one troll, not two.
+- **One IP, one visitor for sentences.** People behind the same IP (one Wi-Fi, some mobile networks) can teach
+  situations (each browser counts) but count as one visitor for sentences. Locally, all your tabs share one IP:
+  Ohm will mostly babble.
+- **Browsers are easy to fake.** One person with several browsers can fake or move situation links (never
+  sentences): the price of letting one Wi-Fi teach situations. The 10 s chat cooldown is per IP.- **Two people can still agree on a sentence.** The visitor rule stops one troll, not two.
 - **One link per word, and confounds.** In the simulation `panas` got linked to `siang`, because hot hours are
   midday hours.
 - **Rare situations learn slowly.** `reboot` almost never happens, so its words may never get a link.

@@ -71,9 +71,8 @@ describe("hear", () => {
   it("scores each message before learning from it", () => {
     say("aku suka"); // both words new: two misses, no known pair yet
     expect(skills(sql)).toEqual({ words: 0, sentences: 0, context: 0, expression: 0 });
-    say("aku suka kopi", BUDI); // aku, suka known (hit, hit), kopi new (miss); the pair aku→suka was seen
+    say("aku suka kopi", BUDI); // aku, suka known (hit, hit), kopi new (miss);
     expect(skills(sql).words).toBeCloseTo(0.019701);
-    expect(skills(sql).sentences).toBeCloseTo(0.01);
   });
 });
 
@@ -85,12 +84,14 @@ describe("reply", () => {
   it("only babbles what a single visitor taught, however often", () => {
     for (let i = 0; i < 5; i++) say("aku suka kopi");
     for (const r of [0, 0.3, 0.6, 0.9]) expect(reply(sql, ["aku"], DRY, () => r)).toMatch(/ beep$/);
+    expect(skills(sql).sentences).toBe(0); // every word was babble
   });
 
   it("follows a pattern once two visitors typed it", () => {
     say("aku suka kopi");
     say("aku suka kopi", BUDI);
     expect(reply(sql, ["aku"], DRY, () => 0)).toBe("aku suka kopi");
+    expect(skills(sql).sentences).toBeCloseTo(0.029701); // suka, kopi and the end all came from patterns: 3 hits
   });
 
   it("never follows one visitor's word, even after a well-known start", () => {
@@ -131,6 +132,21 @@ describe("grounding", () => {
     expect(sql.exec("SELECT word, situation FROM links").toArray()).toEqual([{ word: "hujan", situation: "rain" }]);
   });
 
+
+  it("never links from a single sighting, however rare the situation", () => {
+    for (let i = 10; i < 40; i++) say("aku suka kopi", visitor(i)); // 90 dry sightings
+    say("hujan", visitor(1), RAIN); // alone, G² would be 11.0: past 10.83
+    expect(count(sql, "SELECT COUNT(*) AS n FROM links")).toBe(0);
+  });
+
+  it("friends on one Wi-Fi teach situations, but not sentences", () => {
+    background();
+    const phone = (n: number) => ({ id: `phone-${n}`, name: `P${n}`, ipHash: "00000000000000aa" });
+    say("hujan", phone(1), RAIN);
+    say("hujan", phone(2), RAIN); // another browser on the same Wi-Fi
+    expect(sql.exec("SELECT word, situation FROM links").toArray()).toEqual([{ word: "hujan", situation: "rain" }]);
+    expect(count(sql, "SELECT MAX(count) AS n FROM grams WHERE p1 = 'hujan'")).toBe(1); // still one visitor for patterns
+  });  
   it("measures context: a linked word said while its situation is on", () => {
     background();
     say("hujan", visitor(1), RAIN);

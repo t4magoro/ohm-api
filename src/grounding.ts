@@ -40,7 +40,8 @@ export function relink(sql: SqlStorage, mind: Mind, word: string) {
     const on = mind.seenIn[situation] ?? 0;
     const lift = n / seen / (on / mind.sightings); // how many times more likely the situation is when the word is said
     const score = g2(n, seen - n, on - n, mind.sightings - seen - on + n);
-    if (lift >= 1 && score >= G2_MIN && (!best || score > best.g2)) best = { situation, g2: score, lift };
+    // n >= 2: one sighting can be chance however rare the situation, so a link needs two different browsers
+    if (n >= 2 && lift >= 1 && score >= G2_MIN && (!best || score > best.g2)) best = { situation, g2: score, lift };
   }
   if (best) {
     sql.exec(
