@@ -93,6 +93,9 @@ start marker `<s>` and an end marker `</s>`, and stored in `grams (p2, p1, next,
 (suka, kopi)→ </s>
 ```
 
+It also counts **word pairs** in `pairs (p1, next, count, last_by)`, for when two words aren't enough:
+`aku → suka`, `suka → kopi`, `kopi → </s>`.
+
 **The visitor rule:** a count only goes up when a **different visitor** (salted IP hash) than last time typed
 it. `last_by` remembers who raised it last. So count 2 means "typed from at least two different internet
 connections", and one person repeating a sentence 30 times still counts once.
@@ -101,8 +104,8 @@ Ohm never learns that `kopi` follows `suka` from a sentence it didn't fully unde
 
 ### 4. No levels: trust grows with evidence
 
-To pick the next word, Ohm looks at the **last two words** (the triple), else the **last word** (all triples
-with that p1, added up), else it **babbles**. Each step uses *absolute discounting*: every count loses 1.
+To pick the next word, Ohm looks at the **last two words** (the triple), else the **last word** (the pair),
+else it **babbles**. Each step uses *absolute discounting*: every count loses 1.
 
 Example: Rina and Budi typed `aku suka kopi`, Citra typed `aku suka teh`. After `aku suka`:
 
@@ -115,6 +118,11 @@ The total is 3 and there are 2 rows, so Ohm follows this context (3 − 2) / 3 =
 says kopi. The other 2 times it backs off to the last word only. **Teh, typed by one visitor, is never picked
 from a pattern.** That's the privacy rule: Ohm doesn't repeat what only one person typed. A context he has
 seen a lot is followed almost always, so real sentences appear by themselves as the counts grow.
+**Why pairs have their own counts.** Adding up the triples that end in a word would let through a pair that
+only one visitor typed, after two different words: e.g Rina typing `aku kopi enak` and `kamu kopi enak` adds up to
+2 for `kopi enak`. In the simulation (notebook section 10b) that happened in 0.6% of replies. Counting pairs
+with the visitor rule fixes it without making Ohm babble more (pure-babble replies at day 30: 23.0% ± 3.6%,
+against 22.6% ± 3.1% before), for about 3 more row writes per message.
 
 **Babble** stops as often as real sentences end (`ends / (tokens + ends)`), otherwise it says any known word
 (a random rowid: 1 row read). A reply made only of babble ends with `beep`.

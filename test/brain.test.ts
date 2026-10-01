@@ -104,6 +104,20 @@ describe("reply", () => {
     expect(follow([{ next: "teh", count: 1 }], () => 0)).toBeUndefined();
   });
 
+
+  it("never follows a word pair only one visitor typed, even after two different words", () => {
+    say("aku kopi suka");
+    say("hujan kopi suka"); // Rina typed "kopi suka" twice, after different words: still one visitor
+    expect(count(sql, "SELECT count AS n FROM pairs WHERE p1 = 'kopi' AND next = 'suka'")).toBe(1);
+    expect(reply(sql, ["kopi"], DRY, () => 0)).toBe("kopi beep"); // adding up the triples would have said "kopi suka"
+  });
+
+  it("follows a word pair two visitors typed, even after different words", () => {
+    say("aku kopi suka");
+    say("hujan kopi suka", BUDI); // no triple has 2 visitors, but the pair "kopi suka" does
+    expect(reply(sql, ["kopi"], DRY, () => 0)).toBe("kopi suka");
+  });
+
   it("counts how often Ohm said each word", () => {
     say("kopi");
     reply(sql, ["kopi"], DRY, () => 0);

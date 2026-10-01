@@ -55,6 +55,14 @@ const STEPS: string[][] = [
     `DELETE FROM links WHERE NOT EXISTS (
        SELECT 1 FROM word_ctx c WHERE c.word = links.word AND c.situation = links.situation AND c.n >= 2)`,
   ],
+  // 7: the one-word back-off gets its own counts, with the visitor rule (brain.ts, nextWord). The old
+  // patterns can't be split by visitor, so pairs start empty and fill up as people talk. Nothing reads
+  // grams by p1 any more, so that index goes: one row write less for every new triple.
+  [
+    "CREATE TABLE IF NOT EXISTS pairs (p1 TEXT, next TEXT, count INTEGER, last_by TEXT, PRIMARY KEY (p1, next)) WITHOUT ROWID",
+    "DROP INDEX IF EXISTS grams_p1_next",
+  ],
+
 ];
 
 export function migrate(sql: SqlStorage) {
