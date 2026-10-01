@@ -17,7 +17,7 @@ describe("migrate", () => {
     const sql = testSql(); // testSql() already migrated once
     migrate(sql);
     expect(sql.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "6" });
- });
+  });
 
   it("step 6 drops the links that rest on one sighting", () => {
     const sql = testSql();
@@ -26,5 +26,5 @@ describe("migrate", () => {
     sql.exec("UPDATE kv SET value = '5' WHERE key = 'schema'"); // like the live Ohm, which stopped at step 5
     migrate(sql);
     expect(sql.exec("SELECT word FROM links").toArray()).toEqual([{ word: "hujan" }]);
-  });    
+  });
 });
