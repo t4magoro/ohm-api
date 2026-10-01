@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { ANSWER_MS } from "./answers";
 import { parseAdminCommand } from "./admin";
 import { brainStats, hear, inStyle, reply } from "./brain";
 import { cooldown, hashIp, parseClientMessage } from "./guard";
@@ -45,9 +46,18 @@ const MAX_SOCKETS_PER_IP = 5;
 const WEATHER_EVERY = 15 * 60_000; // Open-Meteo refreshes every 15 minutes
 const VITALS_EVERY = 5 * 60_000; // GET /vitals is recalculated at most this often
 
-/** What Ohm remembers about each open WebSocket. Stored on the socket, so it survives hibernation. */
-type Visitor = { ipHash: string; id: string; name: string; helloAt: number; lastCare?: { t: Care; at: number } };
-
+/**
+ * What Ohm remembers about each open WebSocket. Stored on the socket, so it survives hibernation. `toYou`: the
+ * words of Ohm's last line to this visitor, so their next message can answer it (answers.ts). Never in the database.
+ */
+type Visitor = {
+  ipHash: string;
+  id: string;
+  name: string;
+  helloAt: number;
+  lastCare?: { t: Care; at: number };
+  toYou?: { words: string[]; at: number };
+};
 // The one and only Ohm. Every visitor connects to this single object, and it handles
 // one message at a time, so there is never more than one copy of Ohm's state.
 // It connects visitors and decides what happens; the storage details live in the imported files.
@@ -149,19 +159,22 @@ export class Ohm extends DurableObject<Env> {
     const on = situation(this.weather(), pet, now, me.lastCare); // rain, night, hungry, just charged…
     let answer: string;
     let why: Why | undefined; // how Ohm built it, for the site's "think" button: sent live, never stored
+    let said: string[] | undefined; // his words to you, in stored spellings
     if (isSulking(pet, now)) {
       answer = "… (Ohm is sulking. Play with it first)";
     } else {
       act(pet, "chat", now, this.conditions());
       this.save(pet);
       const raw = reply(this.sql, words, on);
-      const said = raw && inStyle(this.sql, lexicon, raw); // in the spellings people use with him
-      answer = said?.text ?? "beep?";
-      why = said?.why;
-      if (!this.weather().isDay) answer = `zzz… ${answer}`; // it talks in its sleep
+      const styled = raw && inStyle(this.sql, lexicon, raw); // in the spellings people use with him
+      answer = styled?.text ?? "beep?";
+      why = styled?.why;
+      said = raw?.words;      if (!this.weather().isDay) answer = `zzz… ${answer}`; // it talks in its sleep
     }
 
-    const heard = hear(this.sql, lexicon, typed, me, now, on);
+    const answering = me.toYou && now - me.toYou.at <= ANSWER_MS ? me.toYou.words : []; // Ohm's last line to you
+    const heard = hear(this.sql, lexicon, typed, me, now, on, answering);
+    ws.serializeAttachment({ ...me, toYou: said && { words: said, at: now } } satisfies Visitor);
     if (heard.learned.length > 0) {
       kvSet(this.sql, "brain", brainStats(this.sql));
       this.broadcast({ t: "event", e: logEvent(this.sql, now, "taught", me.id, me.name, heard.learned.join(", ")) });

@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { answerTo } from "../src/answers";
 import { brainStats, follow, hear, inStyle, reply } from "../src/brain";
 import { g2 } from "../src/grounding";
 import { markRated } from "../src/history";
 import { rate, skills } from "../src/mind";
+import { blockWord } from "../src/moderation";
 import type { Situation } from "../src/situation";
 import { makeLexicon } from "../src/words";
 import { count, testSql } from "./sql";
@@ -23,7 +25,7 @@ const T0 = Date.UTC(2026, 9, 1);
 const DRY: Situation[] = ["siang"];
 const RAIN: Situation[] = ["siang", "rain"];
 // A tiny lexicon: "badword" stands in for a real blocked word.
-const lexicon = makeLexicon({ id: "aku\nsuka\nkopi\nhujan\nteh\ntidak\ngak", en: "i\nlike\ncoffee\nkopi" }, "badword");
+const lexicon = makeLexicon({ id: "aku\nsuka\nkopi\nhujan\nteh\ntidak\ngak\napa\nkabar\nbaik\nmakan\nnasi\nlagi", en: "i\nlike\ncoffee\nkopi" }, "badword");
 
 let sql: SqlStorage;
 beforeEach(() => {
@@ -159,13 +161,15 @@ describe("why", () => {
     example();
     expect(reply(sql, ["aku"], DRY, () => 0)).toEqual({
       text: "aku suka kopi",
+      words: ["aku", "suka", "kopi"],
       why: {
         on: DRY,
         seed: { word: "aku", from: "topic" },
         steps: [
           { word: "suka", tried: [{ rung: "pair", chance: 5 / 6, followed: true }], share: 1 },
           { word: "kopi", tried: [{ rung: "pair", chance: 2 / 3, followed: true }], share: 0.75 }, // teh has the other ¼
-          { word: "</s>", tried: [{ rung: "pair", chance: 3 / 4, followed: true }], share: 1 },        ],
+          { word: "</s>", tried: [{ rung: "pair", chance: 3 / 4, followed: true }], share: 1 },
+        ],
       },
     });
   });
@@ -184,6 +188,88 @@ describe("why", () => {
     expect(reply(sql, ["hujan"], DRY, () => 0)!.why.steps).toEqual([
       { word: "</s>", tried: [{ rung: "pair", chance: 0, followed: false }, { rung: "word", chance: 0, followed: false }], stop: 0.25 },
     ]);
+  });
+});
+
+describe("answers", () => {
+  // Ohm said `line` to `who`, and they wrote `text` back within 2 minutes.
+  const answer = (line: string, text: string, who = RINA) => hear(sql, lexicon, text.split(" "), who, T0, DRY, line.split(" "));
+  // Ohm asks "kabar" and hears "baik", asks "makan" and hears "nasi", 8 times each, from people taking turns.
+  const chats = (people = [RINA, BUDI]) => {
+    say("kabar baik makan nasi", CITRA); // Ohm knows the words
+    for (let i = 0; i < 8; i++) {
+      answer("kabar", "baik", people[i % people.length]);
+      answer("makan", "nasi", people[i % people.length]);
+    }
+  };
+
+  it("learns what people answer, once two of them did and it's no coincidence", () => {
+    chats();
+    expect(sql.exec("SELECT cue, answer FROM cues ORDER BY cue").toArray()).toEqual([
+      { cue: "kabar", answer: "baik" }, // G² 20.7
+      { cue: "makan", answer: "nasi" },
+    ]);
+  });
+
+  it("one person can't teach him an answer, however often they give it", () => {
+    chats([RINA]);
+    expect(count(sql, "SELECT COUNT(*) AS n FROM cues WHERE answer IS NOT NULL")).toBe(0);
+  });
+
+  it("answers your cue with a whole answer people gave", () => {
+    chats();
+    const { text, why } = reply(sql, ["kabar"], DRY, () => 0)!;
+    expect(text).toBe("baik");
+    expect(why.seed).toMatchObject({ word: "baik", from: "answer", cue: "kabar" });
+    expect(why.seed.lift).toBeCloseTo(1.875); // 8 of 8 "kabar" exchanges were answered "baik", 8 of all 15
+    expect(why.quote).toEqual({ words: ["baik"], times: 8 });
+  });
+
+  it("keeps only answers he could say, and starts from the answer word when none fits", () => {
+    chats();
+    sql.exec("DELETE FROM answers");
+    answer("kabar", "baik xyzzy"); // xyzzy waits for approval: the answer isn't kept
+    expect(count(sql, "SELECT COUNT(*) AS n FROM answers")).toBe(0);
+    const { text, why } = reply(sql, ["kabar"], DRY, () => 0)!;
+    expect(text.split(" ")[0]).toBe("baik");
+    expect(why.quote).toBeUndefined();
+  });
+
+  it("the most specific cue wins: a pair he knows overrules its single words", () => {
+    say("apa kabar baik makan nasi lagi", CITRA);
+    for (let i = 0; i < 10; i++) {
+      answer("apa kabar", "baik", [RINA, BUDI][i % 2]);
+      answer("makan", "nasi", [RINA, BUDI][i % 2]);
+    }
+    answer("lagi apa", "makan"); // a new question, no answer yet
+    expect(reply(sql, ["apa"], DRY, () => 0)!.why.seed).toMatchObject({ word: "baik", cue: "apa" });
+    expect(reply(sql, ["lagi", "apa"], DRY, () => 0)!.why.seed.from).toBe("topic"); // not "baik"
+  });
+
+  it("asks back sometimes, when he has no answer and you didn't ask him anything", () => {
+    say("apa kabar"); // people ask him "apa"
+    expect(reply(sql, ["kopi"], DRY, () => 0)!.why.seed).toEqual({ word: "apa", from: "ask" });
+    expect(reply(sql, ["kopi"], DRY, () => 0.5)!.why.seed.from).toBe("random"); // 3 times in 4 he doesn't
+    expect(reply(sql, ["apa"], DRY, () => 0)!.why.seed.from).toBe("topic"); // you asked him something
+  });
+
+  it("forgets an answer when you block one of its words", () => {
+    chats();
+    blockWord(sql, "baik");
+    expect(answerTo(sql, ["kabar"])).toBeUndefined();
+    expect(count(sql, "SELECT COUNT(*) AS n FROM answers WHERE cue = 'kabar'")).toBe(0);
+  });
+
+  it("says a quoted answer the way most people type it", () => {
+    say("kabar tidak gak makan baik");
+    for (let i = 0; i < 8; i++) {
+      answer("kabar", "gak", [RINA, BUDI][i % 2]);
+      answer("makan", "baik", [RINA, BUDI][i % 2]);
+    }
+    const said = inStyle(sql, lexicon, reply(sql, ["kabar"], DRY, () => 0)!);
+    expect(said.text).toBe("gak");
+    expect(said.why.quote!.words).toEqual(["gak"]);
+    expect(said.words).toEqual(["tidak"]); // stored spelling, for his next exchange
   });
 });
 

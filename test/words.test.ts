@@ -50,7 +50,6 @@ describe("normalize", () => {
   });
 });
 
-
 describe("hasBlocked", () => {
   // "badword" stands in for a real blocked word.
   const lexicon = makeLexicon({ id: "aku", en: "" }, "badword");

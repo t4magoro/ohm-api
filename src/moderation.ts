@@ -23,6 +23,10 @@ export function blockWord(sql: SqlStorage, word: string) {
   sql.exec("DELETE FROM pairs WHERE p1 = ? OR next = ?", word, word);
   sql.exec("DELETE FROM word_ctx WHERE word = ?", word);
   sql.exec("DELETE FROM links WHERE word = ?", word);
+  sql.exec("DELETE FROM answered WHERE word = ?", word);
+  sql.exec("DELETE FROM cue_words WHERE answer = ?", word);
+  sql.exec("UPDATE cues SET answer = NULL, g2 = NULL, lift = NULL WHERE answer = ?", word); // relinked at its next exchange
+  sql.exec("DELETE FROM answers WHERE ' ' || text || ' ' LIKE ?", `% ${word} %`);
 }
 
 export function unblockWord(sql: SqlStorage, word: string) {
@@ -34,7 +38,9 @@ export function unblockWord(sql: SqlStorage, word: string) {
  * blocklist, bans, reports, his past lines, the feed, the Vitals history and unlocked milestones.
  */
 export function resetBrain(sql: SqlStorage) {
-  for (const table of ["words", "pending", "grams", "pairs", "word_ctx", "links"]) sql.exec(`DELETE FROM ${table}`);
+  for (const table of ["words", "pending", "grams", "pairs", "word_ctx", "links", "cues", "answered", "cue_words", "answers"]) {
+    sql.exec(`DELETE FROM ${table}`);
+  }
   sql.exec("DELETE FROM kv WHERE key IN ('brain', 'mind')");
 }
 

@@ -10,13 +10,13 @@ describe("migrate", () => {
     old.exec("INSERT INTO events (at, type, who_id, who_name) VALUES (1, 'charge', 'x', 'IQBAL')");
     migrate(old);
     expect(old.exec("SELECT who_name, detail FROM events").one()).toEqual({ who_name: "IQBAL", detail: null });
-    expect(old.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "8" });
+    expect(old.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "9" });
   });
 
   it("runs each step once, so running it again changes nothing", () => {
     const sql = testSql(); // testSql() already migrated once
     migrate(sql);
-    expect(sql.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "8" });
+    expect(sql.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "9" });
   });
 
   it("step 6 drops the links that rest on one sighting", () => {

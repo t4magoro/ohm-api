@@ -44,7 +44,8 @@ export type Counts = (typeof MILESTONES)[number]["counts"];
 /**
  * How Ohm chose one word of a reply. He tries the last two words ("pair"), then the last word ("word"):
  * `chance` is how often he follows what people taught there, (total − rows / 2) / total. The rung he followed
- * made the word, with `share` = its weight (count − ½) / all weights there. If he followed none, he babbled: * stopped with chance `stop`, or said a random word he knows. "</s>" = he stopped here.
+ * made the word, with `share` = its weight (count − ½) / all weights there. If he followed none, he babbled:
+ * stopped with chance `stop`, or said a random word he knows. "</s>" = he stopped here.
  * The line's text can add "zzz…" (asleep) or "beep" (all babble), so build the words from `seed` and `steps`.
  */
 export type WhyStep = {
@@ -53,11 +54,24 @@ export type WhyStep = {
   share?: number;
   stop?: number;
 };
-/** How Ohm built a reply: what was on, where he started, then every word. Sent with the live line, never stored. */
+/**
+ * How Ohm built a reply: what was on, where he started, then every word. Sent with the live line, never stored.
+ * The seed is your rarest word (topic), the word tied to his situation (with that link's lift), a random word,
+ * the answer word to a `cue` in your message (with that link's lift: how many times more often people answer the
+ * cue with it), or a question word when he asks back. `quote`: he said a whole answer people gave to the cue,
+ * `times` times (then `steps` is empty).
+ */
 export type Why = {
   on: Situation[];
-  seed: { word: string; from: "topic" | "situation" | "random"; situation?: Situation; lift?: number };
+  seed: {
+    word: string;
+    from: "topic" | "situation" | "random" | "answer" | "ask";
+    situation?: Situation;
+    lift?: number;
+    cue?: string;
+  };
   steps: WhyStep[];
+  quote?: { words: string[]; times: number };
 };
 /** Something Ohm said, in reply to a visitor. Visitors' own messages are never shown to others. */
 export type Line = { id: number; at: number; text: string; to: string };
