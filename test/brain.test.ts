@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { brainStats, follow, hear, reply } from "../src/brain";
+import { brainStats, follow, hear, inStyle, reply } from "../src/brain";
 import { g2 } from "../src/grounding";
 import { markRated } from "../src/history";
 import { rate, skills } from "../src/mind";
@@ -23,7 +23,7 @@ const T0 = Date.UTC(2026, 9, 1);
 const DRY: Situation[] = ["siang"];
 const RAIN: Situation[] = ["siang", "rain"];
 // A tiny lexicon: "badword" stands in for a real blocked word.
-const lexicon = makeLexicon({ id: "aku\nsuka\nkopi\nhujan\nteh", en: "i\nlike\ncoffee\nkopi" }, "badword");
+const lexicon = makeLexicon({ id: "aku\nsuka\nkopi\nhujan\nteh\ntidak\ngak", en: "i\nlike\ncoffee\nkopi" }, "badword");
 
 let sql: SqlStorage;
 beforeEach(() => {
@@ -125,6 +125,25 @@ describe("reply", () => {
     say("kopi");
     reply(sql, ["kopi"], DRY, () => 0);
     expect(sql.exec("SELECT said FROM words WHERE word = 'kopi'").one()).toEqual({ said: 1 });
+  });
+});
+
+describe("style", () => {
+  it("stores a word once, and says it the way most people type it", () => {
+    say("aku gak suka", RINA);
+    say("aku gak suka", BUDI); // two people write "gak"
+    say("aku tidak suka", CITRA); // one writes "tidak"
+    expect(sql.exec("SELECT word FROM words WHERE word IN ('gak', 'tidak')").toArray()).toEqual([{ word: "tidak" }]);
+    const { text, why } = inStyle(sql, lexicon, reply(sql, ["aku"], DRY, () => 0)!);
+    expect(text).toBe("aku gak suka");
+    expect(why.steps[0].word).toBe("gak");
+  });
+
+  it("counts one person's spelling once, however often they type it", () => {
+    for (let i = 0; i < 5; i++) say("aku gak suka", RINA);
+    say("aku tidak suka", BUDI);
+    say("aku tidak suka", CITRA); // two people write "tidak", one writes "gak" five times
+    expect(inStyle(sql, lexicon, reply(sql, ["aku"], DRY, () => 0)!).text).toBe("aku tidak suka");
   });
 });
 

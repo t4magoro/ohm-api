@@ -49,7 +49,19 @@ It reads at most 20 words:
 ```
 "Aku  SUKA kopi!!"  →  ["aku", "suka", "kopi"]
 ```
+Then `normalize` folds chat spellings into one. Stretched letters are squashed (`bangettt` → `banget`), and
+Then `normalize` folds chat spellings into one, to store the word under. Stretched letters are squashed
+(`bangettt` → `banget`), and common spellings of the same word are stored as the one that ranks highest in the
+word list (`gak`, `ga`, `nggak` → `tidak`), so they pool their evidence instead of each needing two people of
+its own: in the simulation (notebook section 18) Ohm knew 5% more of what people typed, and the approval queue
+shrank by 60%. But Ohm *says* each word the way most people type it to him: `hear()` counts the spellings (once
+per browser in a row, like sightings), and `inStyle()` picks the most used one. If most people write `ngga`, Ohm
+says `ngga`. The groups are a hand-written list in `src/words.ts`.
 
+common spellings of the same word become the one that ranks highest in the word list, which is sorted by use
+(`gak`, `ga`, `nggak` → `tidak`). Different spellings then pool their evidence instead of each needing two
+people of its own: in the simulation (notebook section 18) Ohm knew 5% more of what people typed, and the
+approval queue shrank by 60%. The groups are a hand-written list in `src/words.ts`.
 If **any** word is on a blocklist (the built-in one or the admin's), the whole message is rejected.
 Ohm doesn't reply, and it learns nothing.
 

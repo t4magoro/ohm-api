@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { parseAdminCommand } from "./admin";
-import { brainStats, hear, reply } from "./brain";
+import { brainStats, hear, inStyle, reply } from "./brain";
 import { cooldown, hashIp, parseClientMessage } from "./guard";
 import { feed, lines, logEvent, markRated, saveLine } from "./history";
 import { kvGet, kvSet } from "./kv";
@@ -138,7 +138,8 @@ export class Ohm extends DurableObject<Env> {
     const pet = this.load(now);
     if (pet.status === "off") return this.send(ws, { t: "error", msg: "Ohm is off. Reboot it first" });
 
-    const words = lexicon.normalize(tokenize(text)); // one spelling per word: "gak" → "tidak"
+    const typed = tokenize(text);
+    const words = lexicon.normalize(typed); // one spelling per word: "gak" → "tidak"
     if (hasBlocked(this.sql, lexicon, words)) {
       return this.send(ws, { t: "error", msg: "Ohm covers its ears. That word isn't allowed" });
     }
@@ -153,13 +154,14 @@ export class Ohm extends DurableObject<Env> {
     } else {
       act(pet, "chat", now, this.conditions());
       this.save(pet);
-      const said = reply(this.sql, words, on);
+      const raw = reply(this.sql, words, on);
+      const said = raw && inStyle(this.sql, lexicon, raw); // in the spellings people use with him
       answer = said?.text ?? "beep?";
       why = said?.why;
       if (!this.weather().isDay) answer = `zzz… ${answer}`; // it talks in its sleep
     }
 
-    const heard = hear(this.sql, lexicon, words, me, now, on);
+    const heard = hear(this.sql, lexicon, typed, me, now, on);
     if (heard.learned.length > 0) {
       kvSet(this.sql, "brain", brainStats(this.sql));
       this.broadcast({ t: "event", e: logEvent(this.sql, now, "taught", me.id, me.name, heard.learned.join(", ")) });

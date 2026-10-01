@@ -8,7 +8,7 @@ import { bump, loadMind, saveMind, type Mind } from "./mind";
 import type { Brain, Why, WhyStep } from "./protocol";
 import type { Situation } from "./situation";
 import { math } from "./wasm";
-import { hasBlocked, type Lexicon } from "./words";
+import { hasBlocked, squash, type Lexicon } from "./words";
 
 const START = "<s>";
 const END = "</s>";
@@ -22,14 +22,16 @@ type Row = { next: string; count: number };
 const exists = (sql: SqlStorage, query: string, ...params: string[]) => sql.exec(query, ...params).toArray().length > 0;
 
 /**
- * Ohm hears a message. First it's a test: before learning anything, the skills record how much of it he
- * could have predicted. Then he learns: allowed new words join his vocabulary, unknown words wait in the
- * queue for your approval, word triples and word + situation sightings are counted. One blocked word
+ * Ohm hears a message, as typed. Every word is stored in one spelling ("gak" → "tidak"), and how it was spelled
+ * is counted, so Ohm can talk like the people he hears (inStyle). First it's a test: before learning anything,
+ * the skills record how much of it he could have predicted. Then he learns: allowed new words join his
+ * vocabulary, unknown words wait in the * queue for your approval, word triples and word + situation sightings are counted. One blocked word
  * rejects everything. The visitor rule: a count only goes up when a different visitor than last time typed it.
  * Patterns count visitors by IP hash, so one person (or one Wi-Fi) repeating a sentence can't make it count more.
  * Situation sightings count browsers, so friends on one Wi-Fi can each teach Ohm what a word goes with.
  */
-export function hear(sql: SqlStorage, lexicon: Lexicon, words: string[], who: Who, now: number, on: Situation[]) {
+export function hear(sql: SqlStorage, lexicon: Lexicon, typed: string[], who: Who, now: number, on: Situation[]) {
+  const words = lexicon.normalize(typed);
   if (hasBlocked(sql, lexicon, words)) return { blocked: true, learned: [] as string[] };
   const mind = loadMind(sql);
 
@@ -87,7 +89,14 @@ export function hear(sql: SqlStorage, lexicon: Lexicon, words: string[], who: Wh
     mind.ends += 1;
   }
 
-  // 3. Grounding: in which situations each word is said.
+  // 3. Style: how people spell the words that have several spellings, once per browser in a row (like sightings).
+  for (const s of new Set(typed.map(squash))) {
+    if (lexicon.spellings(s).length < 2 || mind.spellBy[s] === browser) continue;
+    mind.spellings[s] = (mind.spellings[s] ?? 0) + 1;
+    mind.spellBy[s] = browser;
+  }
+
+  // 4. Grounding: in which situations each word is said.
   for (const w of sighted) countSighting(sql, mind, w, on);
   for (const w of new Set(sighted)) relink(sql, mind, w);
   saveMind(sql, mind);
@@ -214,6 +223,16 @@ export function reply(sql: SqlStorage, heard: string[], on: Situation[], random:
   return { text: babbleOnly ? `${words.join(" ")} beep` : words.join(" "), why };
 }
 
+/** A reply in the spellings most people use with Ohm: "gak" if most write "gak", "tidak" if most write "tidak". */
+export function inStyle(sql: SqlStorage, lexicon: Lexicon, said: { text: string; why: Why }) {
+  const { spellings } = loadMind(sql);
+  const say = (w: string) => lexicon.spellings(w).reduce((a, b) => ((spellings[b] ?? 0) > (spellings[a] ?? 0) ? b : a));
+  const { seed, steps } = said.why;
+  return {
+    text: said.text.split(" ").map(say).join(" "),
+    why: { ...said.why, seed: { ...seed, word: say(seed.word) }, steps: steps.map((s) => ({ ...s, word: say(s.word) })) },
+  };
+}
 /** Vocabulary size and words per language, for the Spellbook. */
 export function brainStats(sql: SqlStorage): Omit<Brain, "skills"> {
   const row = sql

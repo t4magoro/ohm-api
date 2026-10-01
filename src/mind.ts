@@ -12,21 +12,26 @@ export type Mind = {
   ends: number; // sentence ends heard: how often babble stops
   sightings: number; // word sightings, for grounding (see brain.ts, the visitor rule)
   seenIn: Partial<Record<Situation, number>>; // how many of them happened while each situation was on
+  spellings: Record<string, number>; // how often people typed each spelling ("gak": 12), once per browser in a row
+  spellBy: Record<string, string>; // the browser whose spelling last counted (the visitor rule)
 };
 
 const sum = (sql: SqlStorage, query: string) => sql.exec<{ n: number | null }>(query).one().n ?? 0;
 
 export function loadMind(sql: SqlStorage): Mind {
-  return (
-    kvGet<Mind>(sql, "mind") ?? {
-      skills: { words: 0, sentences: 0, context: 0, expression: 0 },
-      // An Ohm that learned before this brain existed: start the babble counters from his tables, once.
-      tokens: sum(sql, "SELECT SUM(uses) AS n FROM words"),
-      ends: sum(sql, "SELECT SUM(count) AS n FROM grams WHERE next = '</s>'"),
-      sightings: 0,
-      seenIn: {},
-    }
-  );
+  const saved = kvGet<Mind>(sql, "mind");
+  // A mind saved before spellings were counted has none yet.
+  if (saved) return { ...saved, spellings: saved.spellings ?? {}, spellBy: saved.spellBy ?? {} };
+  return {
+    skills: { words: 0, sentences: 0, context: 0, expression: 0 },
+    // An Ohm that learned before this brain existed: start the babble counters from his tables, once.
+    tokens: sum(sql, "SELECT SUM(uses) AS n FROM words"),
+    ends: sum(sql, "SELECT SUM(count) AS n FROM grams WHERE next = '</s>'"),
+    sightings: 0,
+    seenIn: {},
+    spellings: {},
+    spellBy: {},
+  };
 }
 
 export const saveMind = (sql: SqlStorage, mind: Mind) => kvSet(sql, "mind", mind);

@@ -39,6 +39,12 @@ describe("normalize", () => {
     expect(lexicon.normalize(tokenize("IYAAA bangettt kopiii"))).toEqual(["iya", "banget", "kopi"]);
   });
 
+    it("knows which spellings belong together, the stored one first", () => {
+    expect(lexicon.spellings("tidak").slice(0, 3)).toEqual(["tidak", "gak", "ga"]);
+    expect(lexicon.spellings("gak")[0]).toBe("tidak");
+    expect(lexicon.spellings("kopi")).toEqual(["kopi"]);
+  });
+
   it("stretching a blocked word doesn't hide it", () => {
     expect(hasBlocked(testSql(), lexicon, lexicon.normalize(tokenize("badwordddd")))).toBe(true);
   });
