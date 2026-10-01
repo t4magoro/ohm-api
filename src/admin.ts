@@ -10,12 +10,15 @@ export type AdminCommand =
   | { do: "ban" | "unban"; ipHash: string }
   | { do: "dismiss" | "unsay"; id: number }
   | { do: "settings"; settings: Settings }
+  | { do: "forget"; text: string }
   | { do: "reset" };
 
 const isWord = (w: unknown): w is string => typeof w === "string" && tokenize(w)[0] === w;
 const isHours = (h: unknown): h is number =>
   typeof h === "number" && Number.isFinite(h) && h >= HOURS_RANGE[0] && h <= HOURS_RANGE[1];
 const isId = (id: unknown): id is number => Number.isSafeInteger(id) && (id as number) > 0;
+// A kept answer: words as Ohm stores them, one space apart.
+const isAnswer = (t: unknown): t is string => typeof t === "string" && t !== "" && tokenize(t).join(" ") === t;
 
 export function parseAdminCommand(action: string, body: unknown): AdminCommand | null {
   const b = (typeof body === "object" && body !== null ? body : {}) as Record<string, unknown>;
@@ -36,7 +39,9 @@ export function parseAdminCommand(action: string, body: unknown): AdminCommand |
         ? { do: action, settings: { chargeHours: b.chargeHours, moodHours: b.moodHours } }
         : null;
     case "reset": // wipes Ohm's brain, so the page has to send the word too
-      return b.confirm === "RESET" ? { do: action } : null;        
+      return b.confirm === "RESET" ? { do: action } : null;
+    case "forget":
+      return isAnswer(b.text) ? { do: action, text: b.text } : null;
     default:
       return null;
   }

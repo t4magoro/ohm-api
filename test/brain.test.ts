@@ -73,7 +73,7 @@ describe("hear", () => {
 
   it("scores each message before learning from it", () => {
     say("aku suka"); // both words new: two misses, no known pair yet
-    expect(skills(sql)).toEqual({ words: 0, sentences: 0, context: 0, expression: 0 });
+    expect(skills(sql)).toEqual({ words: 0, sentences: 0, context: 0, expression: 0, conversation: 0 });
     say("aku suka kopi", BUDI); // aku, suka known (hit, hit), kopi new (miss);
     expect(skills(sql).words).toBeCloseTo(0.019701);
   });
@@ -253,6 +253,17 @@ describe("answers", () => {
     expect(reply(sql, ["apa"], DRY, () => 0)!.why.seed.from).toBe("topic"); // you asked him something
   });
 
+  it("measures conversation: when he had an answer ready for his line, did you give it?", () => {
+    chats();
+    expect(skills(sql).conversation).toBe(0); // the links only formed with the last exchanges
+    answer("kabar", "baik", RINA); // he had "baik" ready for "kabar": a hit
+    expect(skills(sql).conversation).toBeCloseTo(0.01);
+    answer("kabar", "nasi", CITRA); // a miss
+    expect(skills(sql).conversation).toBeCloseTo(0.0099);
+    answer("hujan", "baik", RINA); // no answer ready for "hujan": not a test
+    expect(skills(sql).conversation).toBeCloseTo(0.0099);
+  });
+
   it("forgets an answer when you block one of its words", () => {
     chats();
     blockWord(sql, "baik");
@@ -355,6 +366,12 @@ describe("mind", () => {
     rate(sql, true); // saves the mind for the first time
     const mind = JSON.parse(sql.exec<{ value: string }>("SELECT value FROM kv WHERE key = 'mind'").one().value);
     expect(mind).toMatchObject({ tokens: 3, ends: 2, sightings: 0 });
+  });
+
+  it("a mind saved before a skill existed starts it at 0", () => {
+    const old = { skills: { words: 0.5, sentences: 0.5, context: 0.5, expression: 0.5 }, tokens: 1, ends: 1, sightings: 0, seenIn: {} };
+    sql.exec("INSERT INTO kv (key, value) VALUES ('mind', ?)", JSON.stringify(old));
+    expect(skills(sql)).toEqual({ ...old.skills, conversation: 0 });
   });
 });
 

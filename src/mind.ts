@@ -22,10 +22,13 @@ const sum = (sql: SqlStorage, query: string) => sql.exec<{ n: number | null }>(q
 
 export function loadMind(sql: SqlStorage): Mind {
   const saved = kvGet<Mind>(sql, "mind");
-  const added = { spellings: {}, spellBy: {}, exchanges: 0, questions: {} }; // a mind saved before these has none yet
-  if (saved) return { ...added, ...saved };  return {
-     ...added,
-    skills: { words: 0, sentences: 0, context: 0, expression: 0 },
+  // A mind saved before these were added has none of them yet.
+  const added = { spellings: {}, spellBy: {}, exchanges: 0, questions: {} };
+  const fresh = { words: 0, sentences: 0, context: 0, expression: 0, conversation: 0 };
+  if (saved) return { ...added, ...saved, skills: { ...fresh, ...saved.skills } };
+  return {
+    ...added,
+    skills: fresh,
     // An Ohm that learned before this brain existed: start the babble counters from his tables, once.
     tokens: sum(sql, "SELECT SUM(uses) AS n FROM words"),
     ends: sum(sql, "SELECT SUM(count) AS n FROM grams WHERE next = '</s>'"),

@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
-import { ANSWER_MS } from "./answers";
 import { parseAdminCommand } from "./admin";
+import { ANSWER_MS } from "./answers";
 import { brainStats, hear, inStyle, reply } from "./brain";
 import { cooldown, hashIp, parseClientMessage } from "./guard";
 import { feed, lines, logEvent, markRated, saveLine } from "./history";
@@ -13,6 +13,7 @@ import {
   blockWord,
   dismissReport,
   fileReport,
+  forgetAnswer,
   isBanned,
   overview,
   resetBrain,
@@ -58,6 +59,7 @@ type Visitor = {
   lastCare?: { t: Care; at: number };
   toYou?: { words: string[]; at: number };
 };
+
 // The one and only Ohm. Every visitor connects to this single object, and it handles
 // one message at a time, so there is never more than one copy of Ohm's state.
 // It connects visitors and decides what happens; the storage details live in the imported files.
@@ -169,7 +171,8 @@ export class Ohm extends DurableObject<Env> {
       const styled = raw && inStyle(this.sql, lexicon, raw); // in the spellings people use with him
       answer = styled?.text ?? "beep?";
       why = styled?.why;
-      said = raw?.words;      if (!this.weather().isDay) answer = `zzz… ${answer}`; // it talks in its sleep
+      said = raw?.words;
+      if (!this.weather().isDay) answer = `zzz… ${answer}`; // it talks in its sleep
     }
 
     const answering = me.toYou && now - me.toYou.at <= ANSWER_MS ? me.toYou.words : []; // Ohm's last line to you
@@ -268,6 +271,7 @@ export class Ohm extends DurableObject<Env> {
     else if (cmd.do === "unban") unban(this.sql, cmd.ipHash);
     else if (cmd.do === "dismiss") dismissReport(this.sql, cmd.id);
     else if (cmd.do === "reset") resetBrain(this.sql);
+    else if (cmd.do === "forget") forgetAnswer(this.sql, cmd.text);
     else if (cmd.do === "ban") {
       ban(this.sql, cmd.ipHash, now);
       for (const ws of this.ctx.getWebSockets()) {

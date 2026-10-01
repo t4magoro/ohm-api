@@ -18,7 +18,7 @@ const SUNNY = { weather: { tempC: 27, raining: false, isDay: true }, settings: D
 const BRAIN = {
   vocab: 0,
   langs: { id: { words: 0 }, en: { words: 0 } },
-  skills: { words: 0, sentences: 0, context: 0, expression: 0 },
+  skills: { words: 0, sentences: 0, context: 0, expression: 0, conversation: 0 },
 };
 
 let sql: SqlStorage;
@@ -123,13 +123,18 @@ describe("vitals", () => {
     expect(v.topWords[0]).toEqual({ word: "kopi", uses: 9, said: 7, by: "Rina" });
   });
 
-  it("returns each hour's skills, or null for snapshots from before brain v2", () => {
-    const skills = { words: 0.5, sentences: 0.25, context: 0, expression: 1 };
+  it("returns each hour's skills, or null for what wasn't measured yet", () => {
+    const skills = { words: 0.5, sentences: 0.25, context: 0, expression: 1, conversation: 0.75 };
     snapshot(sql, newPet(T0, SUNNY), { ...BRAIN, skills }, 1, T0);
-    sql.exec("INSERT INTO snapshots (at, charge, mood, vocab, online) VALUES (?, 50, 50, 3, 0)", T0 + HOUR); // an old row
-    const now = T0 + 2 * HOUR;
+    sql.exec("INSERT INTO snapshots (at, charge, mood, vocab, online) VALUES (?, 50, 50, 3, 0)", T0 + HOUR); // before brain v2
+    sql.exec(
+      `INSERT INTO snapshots (at, charge, mood, vocab, online, skill_words, skill_sentences, skill_context, skill_expression)
+       VALUES (?, 50, 50, 3, 0, 0.5, 0.25, 0, 1)`,
+      T0 + 2 * HOUR,
+    ); // before the conversation skill
+    const now = T0 + 3 * HOUR;
     const v = vitals(sql, standing(newPet(T0, SUNNY), 0, now), [], BRAIN, now);
-    expect(v.snapshots.map((s) => s.skills)).toEqual([skills, null]);
+    expect(v.snapshots.map((s) => s.skills)).toEqual([skills, null, { ...skills, conversation: null }]);
   });
 
     it("lists the strongest links first, at most 12", () => {

@@ -6,6 +6,7 @@ import {
   blockWord,
   dismissReport,
   fileReport,
+  forgetAnswer,
   isBanned,
   overview,
   resetBrain,
@@ -62,6 +63,16 @@ describe("word moderation", () => {
     expect(o.pending).toEqual([{ word: "wkwk", seen: 1 }]);
     expect(o.words).toEqual([{ word: "aku", by: "Rina", ipHash: "0123456789abcdef", at: T0 }]);
     expect(o.settings).toEqual(DEFAULT_SETTINGS);
+  });
+  
+  it("lists each kept answer once, and forgets it under every cue", () => {
+    const keep = (cue: string, n: number, at: number) =>
+      sql.exec("INSERT INTO answers (cue, text, n, last_by, at) VALUES (?, 'lagi makan', ?, 'b', ?)", cue, n, at);
+    keep("lagi", 2, T0);
+    keep("lagi apa", 3, T0 + 1);
+    expect(overview(sql, DEFAULT_SETTINGS).answers).toEqual([{ text: "lagi makan", n: 3, at: T0 + 1 }]);
+    forgetAnswer(sql, "lagi makan");
+    expect(count(sql, "SELECT COUNT(*) AS n FROM answers")).toBe(0);
   });
 
   it("search finds a word in every list, and % or _ only match themselves", () => {

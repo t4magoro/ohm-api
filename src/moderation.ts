@@ -29,6 +29,11 @@ export function blockWord(sql: SqlStorage, word: string) {
   sql.exec("DELETE FROM answers WHERE ' ' || text || ' ' LIKE ?", `% ${word} %`);
 }
 
+/** Ohm forgets a whole answer he kept (answers.ts), under every cue. He can still learn it again. */
+export function forgetAnswer(sql: SqlStorage, text: string) {
+  sql.exec("DELETE FROM answers WHERE text = ?", text);
+}
+
 export function unblockWord(sql: SqlStorage, word: string) {
   sql.exec("DELETE FROM blocked WHERE word = ?", word);
 }
@@ -91,6 +96,11 @@ export function overview(sql: SqlStorage, settings: Settings): AdminOverview {
       .toArray(),
     blocked: sql.exec<O["blocked"][number]>("SELECT word FROM blocked ORDER BY word").toArray(),
     bans: sql.exec<O["bans"][number]>("SELECT ip_hash AS ipHash, at FROM bans ORDER BY at DESC").toArray(),
+    // One row per answer, though it's kept under up to 6 cues. ponytail: GROUP BY reads the whole table; fine
+    // for a few thousand rows and the admin page, add an index on `at` if it grows past that.
+    answers: sql
+      .exec<O["answers"][number]>("SELECT text, MAX(n) AS n, MAX(at) AS at FROM answers GROUP BY text ORDER BY at DESC LIMIT 50")
+      .toArray(),
   };
 }
 

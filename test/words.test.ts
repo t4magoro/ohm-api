@@ -38,7 +38,6 @@ describe("normalize", () => {
   it("squashes stretched letters", () => {
     expect(lexicon.normalize(tokenize("IYAAA bangettt kopiii"))).toEqual(["iya", "banget", "kopi"]);
   });
-
     it("knows which spellings belong together, the stored one first", () => {
     expect(lexicon.spellings("tidak").slice(0, 3)).toEqual(["tidak", "gak", "ga"]);
     expect(lexicon.spellings("gak")[0]).toBe("tidak");
