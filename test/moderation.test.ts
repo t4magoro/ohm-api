@@ -49,6 +49,7 @@ describe("word moderation", () => {
     blockWord(sql, "suka");
     expect(count(sql, "SELECT COUNT(*) AS n FROM words WHERE word = 'suka'")).toBe(0);
     expect(count(sql, "SELECT COUNT(*) AS n FROM grams WHERE 'suka' IN (p2, p1, next)")).toBe(0);
+    expect(count(sql, "SELECT COUNT(*) AS n FROM pairs WHERE 'suka' IN (p1, next)")).toBe(0);
     expect(count(sql, "SELECT COUNT(*) AS n FROM word_ctx WHERE word = 'suka'")).toBe(0);
     expect(hear(sql, lexicon, ["suka"], RINA, T0, DRY).blocked).toBe(true);
     unblockWord(sql, "suka");
@@ -82,7 +83,7 @@ describe("reset", () => {
     ban(sql, RINA.ipHash, T0);
     sql.exec("INSERT INTO lines (at, text, to_name, ip_hash) VALUES (?, 'aku suka', 'Rina', ?)", T0, RINA.ipHash);
     resetBrain(sql);
-    for (const table of ["words", "pending", "grams", "word_ctx", "links"]) {
+    for (const table of ["words", "pending", "grams", "pairs", "word_ctx", "links"]) {
       expect(count(sql, `SELECT COUNT(*) AS n FROM ${table}`)).toBe(0);
     }
     expect(count(sql, "SELECT COUNT(*) AS n FROM kv WHERE key IN ('brain', 'mind')")).toBe(0);

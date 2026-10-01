@@ -82,7 +82,7 @@ export function hear(sql: SqlStorage, lexicon: Lexicon, words: string[], who: Wh
   }
   for (const piece of pieces) {
     if (piece.length === 0) continue;
-    learnTriples(sql, piece, who.ipHash);
+    learnPatterns(sql, piece, who.ipHash);
     mind.tokens += piece.length;
     mind.ends += 1;
   }
@@ -94,9 +94,10 @@ export function hear(sql: SqlStorage, lexicon: Lexicon, words: string[], who: Wh
   return { blocked: false, learned };
 }
 
-// "aku suka kopi" → (<s>,<s>)→aku, (<s>,aku)→suka, (aku,suka)→kopi, (suka,kopi)→</s>.
+// "aku suka kopi" → triples (<s>,<s>)→aku, (<s>,aku)→suka, (aku,suka)→kopi, (suka,kopi)→</s>,
+// and pairs aku→suka, suka→kopi, kopi→</s> for the one-word back-off.
 // Each count goes up by 1, unless the same visitor raised it last time (then nothing is written).
-function learnTriples(sql: SqlStorage, words: string[], ipHash: string) {
+function learnPatterns(sql: SqlStorage, words: string[], ipHash: string) {
   const t = [START, START, ...words, END];
   for (let i = 2; i < t.length; i++) {
     sql.exec(
@@ -108,9 +109,17 @@ function learnTriples(sql: SqlStorage, words: string[], ipHash: string) {
       t[i],
       ipHash,
     );
+    if (t[i - 1] === START) continue; // Ohm always starts from a word, so he never backs off to <s> alone
+    sql.exec(
+      `INSERT INTO pairs (p1, next, count, last_by) VALUES (?, ?, 1, ?)
+       ON CONFLICT (p1, next) DO UPDATE SET count = count + 1, last_by = excluded.last_by
+       WHERE pairs.last_by IS NOT excluded.last_by`,
+      t[i - 1],
+      t[i],
+      ipHash,
+    );
   }
 }
-
 /** Picks a row with probability proportional to its count. The picking itself runs in C++. */
 export function pickWeighted<T extends { count: number }>(rows: T[], random: () => number): T | undefined {
   const n = Math.min(rows.length, MAX_WEIGHTS);
@@ -141,20 +150,18 @@ function randomWord(sql: SqlStorage, random: () => number) {
     .one().word;
 }
 
-/** The next word: from the last two words, else the last word, else babble. */
+/**
+ * The next word: from the last two words, else the last word, else babble. The last word has its own
+ * counts (pairs), with the visitor rule. Adding up the triples instead would let through a pair that one
+ * visitor typed after two different words ("aku kopi enak", "kamu kopi enak"): brain_sim.ipynb, section 10b.
+ */
 function nextWord(sql: SqlStorage, mind: Mind, p2: string, p1: string, random: () => number) {
   const tri = sql
     .exec<Row>(`SELECT next, count FROM grams WHERE p2 = ? AND p1 = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, p2, p1)
     .toArray();
-  const bi = () =>
-    sql
-      .exec<Row>(
-        `SELECT next, SUM(count) AS count FROM grams WHERE p1 = ? GROUP BY next ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`,
-        p1,
-      )
-      .toArray();
-  const word = follow(tri, random) ?? follow(bi(), random);
-  if (word) return { word, babble: false };
+  const pair = () =>
+    sql.exec<Row>(`SELECT next, count FROM pairs WHERE p1 = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, p1).toArray();
+  const word = follow(tri, random) ?? follow(pair(), random);  if (word) return { word, babble: false };
   // Babble: stop as often as real sentences end, otherwise say any word Ohm knows.
   const heard = mind.tokens + mind.ends;
   return { word: random() < (heard ? mind.ends / heard : 1) ? END : randomWord(sql, random), babble: true };
