@@ -24,12 +24,12 @@ export const DEFAULT_SETTINGS: Settings = { chargeHours: 20, moodHours: 12.5 };
 export const HOURS_RANGE = [1, 168] as const; // one hour to one week
 
 /** How well Ohm does, 0 to 1. Measured on every message before he learns from it. */
-export type Skills = { words: number; sentences: number; context: number; expression: number };
+export type Skills = { words: number; sentences: number; context: number; expression: number; conversation: number };
 
 /** What's happening around Ohm (situation.ts): weather, Bandung's part of the day, low stats, what a visitor just did. */
 export type Care = "charge" | "play" | "reboot";
 export type Situation = "rain" | "hot" | "pagi" | "siang" | "sore" | "malam" | "battery_low" | "mood_low" | Care;
-/** What Ohm knows, for the Spellbook: its vocabulary, words per language, and the four skills. */
+/** What Ohm knows, for the Spellbook: its vocabulary, words per language, and the five skills. */
 export type LangStat = { words: number };
 export type Brain = { vocab: number; langs: { id: LangStat; en: LangStat }; skills: Skills };
 /** Goals everyone works on together. Reaching one gives Ohm a new part on its sprite, for good. */
@@ -106,8 +106,18 @@ export type ServerMsg =
   | { t: "error"; msg: string };
 
 /** One hourly reading for the Vitals charts. `at` is the start of the hour. */
-/** One hourly reading. `skills` is null in snapshots from before brain v2: not measured, which isn't the same as 0. */
-export type Snapshot = { at: number; charge: number; mood: number; vocab: number; online: number; skills: Skills | null };
+/**
+ * One hourly reading. `skills` is null in snapshots from before brain v2, and `skills.conversation` in snapshots
+ * from before it was measured: not measured, which isn't the same as 0.
+ */
+export type Snapshot = {
+  at: number;
+  charge: number;
+  mood: number;
+  vocab: number;
+  online: number;
+  skills: (Omit<Skills, "conversation"> & { conversation: number | null }) | null;
+};
 
 /** How far a milestone is. `etaDays` is at this week's pace: null once unlocked, or with no progress. */
 export type MilestoneProgress = { id: MilestoneId; value: number; done: boolean; etaDays: number | null };
@@ -132,6 +142,7 @@ export type AdminOverview = {
   words: { word: string; by: string; ipHash: string | null; at: number }[];
   blocked: { word: string }[];
   bans: { ipHash: string; at: number }[];
+  answers: { text: string; n: number; at: number }[]; // kept whole answers (answers.ts), newest first
 };
 
 /** What the admin search box finds (GET /admin/search?q=): the word lists, only words containing `q`. */

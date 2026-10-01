@@ -6,7 +6,7 @@
 // in a month he went from answering 11% of common questions to 60% (35% in a quiet crowd), and 88% of his links
 // were real answers.
 import { g2 } from "./grounding";
-import type { Mind } from "./mind";
+import { bump, type Mind } from "./mind";
 
 export const ANSWER_MS = 2 * 60_000; // how long your next message counts as an answer to Ohm's line
 const G2_MIN = 20; // chosen on separate tuning runs (section 18): stricter than situations, so fewer wrong links
@@ -46,6 +46,7 @@ export function learnAnswer(sql: SqlStorage, mind: Mind, line: string[], words: 
   const answerWords = rarest(words.filter((w) => !line.includes(w)));
 
   mind.exchanges += 1;
+  const ready: string[] = []; // the answers Ohm had for his line's cues, before this exchange
   for (const w of answerWords) {
     sql.exec("INSERT INTO answered (word, n) VALUES (?, 1) ON CONFLICT (word) DO UPDATE SET n = n + 1", w);
   }
@@ -60,18 +61,22 @@ export function learnAnswer(sql: SqlStorage, mind: Mind, line: string[], words: 
         browser,
       );
     }
-    relinkCue(sql, mind, cue);
+    const had = relinkCue(sql, mind, cue);
+    if (had) ready.push(had);
   }
+  // The conversation skill: when Ohm had an answer ready for a cue of his line, did you give it?
+  if (ready.length > 0) bump(mind, "conversation", ready.some((a) => words.includes(a)));
   return cues;
 }
 
 /**
  * Counts one more exchange for this cue and re-checks its link. For each answer word ever given to it, a 2×2 table
  * of exchanges (this cue or not × this answer or not). The link goes to the most significant answer that the cue
- * makes *more* likely, if it passes G2_MIN and two different browsers gave it.
+ * makes *more* likely, if it passes G2_MIN and two different browsers gave it. Returns the answer it had before.
  */
 function relinkCue(sql: SqlStorage, mind: Mind, cue: string) {
-  const n = (sql.exec<{ n: number }>("SELECT n FROM cues WHERE cue = ?", cue).toArray()[0]?.n ?? 0) + 1;
+  const before = sql.exec<{ n: number; answer: string | null }>("SELECT n, answer FROM cues WHERE cue = ?", cue).toArray()[0];
+  const n = (before?.n ?? 0) + 1;
   const all = mind.exchanges;
   let best: Omit<Link, "cue"> | undefined;
   const rows = sql.exec<{ answer: string; k: number; answered: number }>(
@@ -93,6 +98,7 @@ function relinkCue(sql: SqlStorage, mind: Mind, cue: string) {
     best?.g2 ?? null,
     best?.lift ?? null,
   );
+  return before?.answer;
 }
 
 /**
@@ -147,7 +153,6 @@ export const quoteFor = (sql: SqlStorage, link: Link) =>
       `% ${link.answer} %`,
     )
     .toArray()[0];
-
 /** Question words people used with Ohm, for asking back. Only words he knows: he can only say those. */
 export function countQuestions(mind: Mind, known: string[]) {
   for (const w of new Set(known)) if (QWORDS.has(w)) mind.questions[w] = (mind.questions[w] ?? 0) + 1;

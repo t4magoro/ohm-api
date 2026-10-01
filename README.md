@@ -230,6 +230,7 @@ about the last 100 observations (`s ← s + (hit − s) / 100`), from 0 to 1:
 | sentences | each word Ohm says | it came from a pattern people taught him, not from babble |
 | context | each word with a link | its situation is on right now |
 | expression | a pat or frown on Ohm's reply (`rate`, only by the visitor he answered, once) | it's a pat |
+| conversation | an exchange where Ohm had an answer ready for a cue of his own line (section 6) | your reply has that answer |
 
 They're in `/state` as `brain.skills` and in the hourly snapshots. Sentences is measured on what Ohm *says*:
 in the simulation, "has Ohm heard this pair?" showed 84% even on one shared Wi-Fi, where Ohm only said 18% of
@@ -256,6 +257,7 @@ line, and the piece it lands in wins.
 - **Approve** (admin): a word from the queue joins the vocabulary. It gets no triples until someone uses it again.
 - **Block** (admin): the word is removed from `words`, `pending`, every triple, its situation counts and link, its answer counts and links, and every kept answer that contains it, so Ohm can never say it again.
 - **Report** (visitor): flags one of Ohm's lines for the admin page. The admin can remove it from everyone's screen (`unsay`).
+- **Forget** (admin, `POST /admin/forget` with `{"text": …}`): Ohm forgets one kept answer under every cue. The admin page lists the newest 50. It can come back if people give it again.
 - **Reset** (admin, `POST /admin/reset` with `{"confirm":"RESET"}`): Ohm forgets everything he learned. The blocklist, bans, reports, past lines, feed, Vitals history and milestones stay.
 
 ### Known limitations

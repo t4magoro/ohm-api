@@ -10,6 +10,7 @@ describe("parseAdminCommand", () => {
       settings: { chargeHours: 24, moodHours: 12.5 },
     });
     expect(parseAdminCommand("reset", { confirm: "RESET" })).toEqual({ do: "reset" });
+    expect(parseAdminCommand("forget", { text: "lagi makan" })).toEqual({ do: "forget", text: "lagi makan" });
   });
 
   it("rejects anything else", () => {
@@ -27,6 +28,8 @@ describe("parseAdminCommand", () => {
       ["reset", {}], // a reset needs the confirmation word
       ["reset", { confirm: "reset" }],
       ["settings", null],
+      ["forget", { text: "" }],
+      ["forget", { text: "Lagi  makan!" }], // not how Ohm stores an answer
     ];
     for (const [action, body] of bad) expect(parseAdminCommand(action, body)).toBeNull();
   });

@@ -79,13 +79,16 @@ const STEPS: string[][] = [
     "CREATE TABLE IF NOT EXISTS cue_words (cue TEXT, answer TEXT, n INTEGER, last_by TEXT, PRIMARY KEY (cue, answer)) WITHOUT ROWID",
     "CREATE TABLE IF NOT EXISTS answers (cue TEXT, text TEXT, n INTEGER, last_by TEXT, at INTEGER, PRIMARY KEY (cue, text)) WITHOUT ROWID",
   ],
+  // 10: the conversation skill in the hourly snapshot
+  ["ALTER TABLE snapshots ADD COLUMN skill_conversation REAL"],
 ];
 
-export function migrate(sql: SqlStorage) {
+/** Runs the steps that haven't run yet. Tests pass `upTo` to build an older Ohm. */
+export function migrate(sql: SqlStorage, upTo = STEPS.length) {
   sql.exec("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)");
   const row = sql.exec<{ value: string }>("SELECT value FROM kv WHERE key = 'schema'").toArray()[0];
   const done = row ? Number(row.value) : 0;
-  STEPS.slice(done).forEach((step, i) => {
+  STEPS.slice(done, upTo).forEach((step, i) => {
     for (const statement of step) sql.exec(statement);
     sql.exec(
       "INSERT INTO kv (key, value) VALUES ('schema', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",

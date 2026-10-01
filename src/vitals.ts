@@ -23,16 +23,17 @@ type SnapshotRow = Omit<Snapshot, "skills"> & {
   skill_sentences: number | null;
   skill_context: number | null;
   skill_expression: number | null;
+  skill_conversation: number | null;
 };
 const count = (sql: SqlStorage, query: string, ...params: (string | number)[]) =>
   sql.exec<{ n: number }>(query, ...params).one().n;
 
 /** Saves Ohm's stats once per hour. The 15-minute alarm calls this; only the first call in each hour writes. */
 export function snapshot(sql: SqlStorage, pet: Pet, brain: Brain, online: number, now: number) {
-  const { words, sentences, context, expression } = brain.skills;
+  const { words, sentences, context, expression, conversation } = brain.skills;
   sql.exec(
-    `INSERT INTO snapshots (at, charge, mood, vocab, online, skill_words, skill_sentences, skill_context, skill_expression)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (at) DO NOTHING`,
+    `INSERT INTO snapshots (at, charge, mood, vocab, online, skill_words, skill_sentences, skill_context, skill_expression,
+       skill_conversation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (at) DO NOTHING`,
     now - (now % HOUR),
     valueNow(pet.charge, now),
     valueNow(pet.mood, now),
@@ -42,6 +43,7 @@ export function snapshot(sql: SqlStorage, pet: Pet, brain: Brain, online: number
     sentences,
     context,
     expression,
+    conversation,
   );
 }
 
@@ -95,19 +97,25 @@ export function vitals(sql: SqlStorage, s: Record<Counts, number>, unlocked: Mil
   return {
     snapshots: sql
       .exec<SnapshotRow>(
-        `SELECT at, charge, mood, vocab, online, skill_words, skill_sentences, skill_context, skill_expression
-         FROM snapshots WHERE at > ? ORDER BY at`,
+        `SELECT at, charge, mood, vocab, online, skill_words, skill_sentences, skill_context, skill_expression,
+         skill_conversation FROM snapshots WHERE at > ? ORDER BY at`,
         week,
       )
-      .toArray()
-      .map(({ skill_words, skill_sentences, skill_context, skill_expression, ...s }) => ({
+      .toArray().map(({ skill_words, skill_sentences, skill_context, skill_expression, skill_conversation, ...s }) => ({
         ...s,
         // Snapshots from before brain v2 have no skills: not measured, which isn't the same as 0.
         skills:
           skill_words === null
             ? null
-            : { words: skill_words, sentences: skill_sentences!, context: skill_context!, expression: skill_expression! },
-      })),hours,
+            : {
+                words: skill_words,
+                sentences: skill_sentences!,
+                context: skill_context!,
+                expression: skill_expression!,
+                conversation: skill_conversation,
+              },
+      })),
+    hours,
     growth: sql
       .exec<{ day: string; words: number }>(
         `SELECT date((at + ${BANDUNG}) / 1000, 'unixepoch') AS day, COUNT(*) AS words FROM words GROUP BY day ORDER BY day`,
