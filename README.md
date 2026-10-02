@@ -116,28 +116,35 @@ Ohm never learns that `kopi` follows `suka` from a sentence it didn't fully unde
 ### 4. No levels: trust grows with evidence
 
 To pick the next word, Ohm looks at the **last two words** (the triple), else the **last word** (the pair),
-else it **babbles**. Each step uses *absolute discounting* with D = ½: every count loses half.
+else it **babbles**. Each step uses *absolute discounting* with D = ¾: every count loses three quarters.
 
 Example: Rina and Budi typed `aku suka kopi`, Citra typed `aku suka teh`. After `aku suka`:
 
-| next | count | count − ½ (weight) |
+| next | count | count − ¾ (weight) |
 |---|---|---|
-| kopi | 2 | 1½ |
-| teh | 1 | ½ |
+| kopi | 2 | 1¼ |
+| teh | 1 | ¼ |
 
-The total is 3 and there are 2 rows, so Ohm follows this context (3 − 1) / 3 = **2 times in 3**, and then says
-kopi 3 times in 4 and teh 1 time in 4. The other time in 3 he backs off to the last word only.
+The total is 3 and there are 2 rows, so Ohm follows this context (3 − 1½) / 3 = **1 time in 2**, and then says
+kopi 5 times in 6 and teh 1 time in 6. The other time he backs off to the last word only.
 
-**Ohm learns like a toddler: from anyone.** A sentence one visitor typed has half a vote, so Ohm can say it, but
-what two people said weighs three times as much, and repeating something never counts twice (the visitor rule).
-In the simulation (notebook section 10c) this cut pure-babble replies from 23% to 4% at day 30 (35% to 6% at
-day 7). The price: about 59% of replies contain a word pair only one person ever typed, so anything typed can
-come back to everyone. Before, Ohm used D = 1 and never followed one visitor's pattern (section 10).
+**Ohm learns like a toddler: from anyone.** A sentence one visitor typed has a quarter vote, so Ohm can say it,
+but what two people said weighs five times as much, and repeating something never counts twice (the visitor
+rule), so anything typed can come back to everyone. D = ¾ predicts people's next words best: −0.096 ± 0.012
+bits/word against D = ½ on the 10 test worlds, chosen on the 3 tuning worlds and also the best on the test worlds
+(notebook sections 19a, 24). Before brain v3 Ohm used D = ½ (section 10c), and before that D = 1, which never
+followed one visitor's pattern (section 10).
 
 **Why pairs have their own counts.** Adding up the triples that end in a word would count a pair one visitor
 typed after two different words twice: Rina typing `aku kopi enak` and `kamu kopi enak` would add up to 2 for
 `kopi enak`. Counting pairs with the visitor rule keeps it at one visitor (notebook section 10b), for about 3
 more row writes per message.
+
+**Talking from evidence.** The chance to back off is for *predicting* people: new words do come. When Ohm
+*talks*, rolling it at the last word meant saying a random word. So he always follows a last word someone
+continued (its chance shows as 1 in `why`) and only babbles after a word nobody continued. In the simulation
+replies became fluent (every word pair typed by someone) 87% of the time instead of 70%, and pure babble fell from
+4% to 0% (notebook section 19f). What he learns doesn't change.
 
 **Babble** stops as often as real sentences end (`ends / (tokens + ends)`), otherwise it says any known word
 (a random rowid: 1 row read). A reply made only of babble ends with `beep`.
@@ -157,6 +164,14 @@ likely when the word is said, and at least two different browsers said it there.
 Example: ten visitors chat in the dry (30 sightings). One visitor says `hujan` in the rain: G² = 8.8, which
 could be chance, so no link. A second visitor says it: G² = 15.0, so **hujan → rain**. The Wilson rule from the first
 plan would have linked it after one sighting; in the simulation it got only 22% of links right, G² got 92%.
+
+**One sighting per word per clock hour.** G² treats sightings as independent, but messages in one hour all share
+one weather: one teaching drill on a hot afternoon linked `kabar` and `bagaimana` to hot days. So a word counts at
+most once per clock hour (`words.last_hour`). In the simulation one drill left a wrong link on 270 of 300
+world-days, and 5 with this rule, with no measurable loss of recall (notebook section 20). A drill at the *same*
+hour every few days still links: that is a real pattern in what people typed, so teach at different times of day.
+Schema step 11 took the sightings of the words the live drill had linked (`banget`, `kabar`, `bagaimana`, `dulu`,
+`alhamdulillah`) out of every count, so they relearn under this rule.
 
 ### 6. Answers: what people reply to Ohm
 
@@ -211,8 +226,8 @@ live `line` message for the site's "think" button:
 - `seed`: where Ohm started: your topic, the word tied to his situation (with that link's lift), a random word,
   the answer to a cue in your message (with the cue and that link's lift), or a question word when he asks back.
 - `quote`: when he said a whole answer people gave, its words and how many times it was given.
-- `steps`: for every word, the rungs he tried with their chance, then the share of the word he picked, or, when
-  he babbled, his chance to stop.
+- `steps`: for every word, the rungs he tried with their chance (1 at the last word when someone continued it),
+  then the share of the word he picked, or, when he babbled, his chance to stop.
 
 The numbers are exactly the ones Ohm used, from rows he had already read: no extra request, no extra row read.
 `why` is never stored, so lines that come with the page have none. It only names words Ohm said. Two things it
@@ -227,14 +242,17 @@ about the last 100 observations (`s ← s + (hit − s) / 100`), from 0 to 1:
 | Skill | One observation | Hit when |
 |---|---|---|
 | words | each word in a message | Ohm already knew it |
-| sentences | each word Ohm says | it came from a pattern people taught him, not from babble |
+| guessing | each known word in a message, and each sentence end | it was Ohm's most likely next word (section 4) |
 | context | each word with a link | its situation is on right now |
 | expression | a pat or frown on Ohm's reply (`rate`, only by the visitor he answered, once) | it's a pat |
 | conversation | an exchange where Ohm had an answer ready for a cue of his own line (section 6) | your reply has that answer |
 
-They're in `/state` as `brain.skills` and in the hourly snapshots. Sentences is measured on what Ohm *says*:
-in the simulation, "has Ohm heard this pair?" showed 84% even on one shared Wi-Fi, where Ohm only said 18% of
-his words from patterns. Pats only move the meter: letting them change the counts either did nothing
+They're in `/state` as `brain.skills` and in the hourly snapshots. Guessing is top-1 next-word accuracy, the
+usual test for a language model (notebook section 22): in the simulation, on messages from days the brain hadn't
+seen, it reached about 35% by day 28, against 25% for always guessing the most common word. A word he doesn't know
+breaks the sentence, as in learning. It replaced *sentences* (the share of his words that came from patterns) in
+brain v3, because talking from evidence pins that at 100%: snapshots have sentences until then, guessing after.
+Pats only move the meter: letting them change the counts either did nothing
 measurable (+1) or made Ohm copy himself (+5).
 
 ### 9. The weighted pick, in C++
@@ -266,7 +284,7 @@ line, and the piece it lands in wins.
   can come back, word for word, to everyone. The chat says so, and moderation (block, report, ban) is the safety
   net. Only words from the word lists or approved by the admin are ever learned, and never numbers.
 - **One IP, one visitor for sentences.** People behind the same IP (one Wi-Fi, some mobile networks) count as one
-  visitor for sentences: together they get half a vote, like one person. They can each teach situations (each
+  visitor for sentences: together they get a quarter vote, like one person. They can each teach situations (each
   browser counts).
 - **Browsers are easy to fake.** One person with several browsers can fake or move situation links: the price of
   letting one Wi-Fi teach situations and answers. The 10 s chat cooldown is per IP.
