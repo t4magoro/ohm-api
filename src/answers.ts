@@ -144,6 +144,17 @@ export function answerTo(sql: SqlStorage, heard: string[]): Link | undefined {
   return links.sort((a, b) => b.g2 - a.g2 || (a.cue < b.cue ? -1 : 1))[0];
 }
 
+/** The counts behind a link's lift, as they are now (`why` shows them): see Why in protocol.ts. */
+export function answerCounts(sql: SqlStorage, mind: Mind, { cue, answer }: Link) {
+  const n = (query: string, ...params: string[]) => sql.exec<{ n: number }>(query, ...params).toArray()[0]?.n ?? 0;
+  return {
+    n: n("SELECT n FROM cue_words WHERE cue = ? AND answer = ?", cue, answer),
+    of: n("SELECT n FROM cues WHERE cue = ?", cue),
+    all: n("SELECT n FROM answered WHERE word = ?", answer),
+    total: mind.exchanges,
+  };
+}
+
 /** The answer people gave most often to this link's cue, among those with its answer word: what Ohm says whole. */
 export const quoteFor = (sql: SqlStorage, link: Link) =>
   sql

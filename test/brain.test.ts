@@ -112,12 +112,18 @@ describe("reply", () => {
       { next: "kopi", count: 2 }, // Rina and Budi: 1¼ votes
       { next: "teh", count: 1 }, // Citra: ¼ vote
     ];
-    expect(follow(afterAkuSuka, () => 0)).toEqual({ chance: 0.5, followed: true, word: "kopi", share: 5 / 6 });
-    const rolls = [0.1, 0.9]; // follow (0.1 < ½), then pick at 0.9: past kopi's 5 of 6
-    expect(follow(afterAkuSuka, () => rolls.shift()!)).toEqual({ chance: 0.5, followed: true, word: "teh", share: 1 / 6 });
-    expect(follow(afterAkuSuka, () => 0.7)).toEqual({ chance: 0.5, followed: false }); // 1 time in 2 Ohm backs off to "suka" alone
-    expect(follow(afterAkuSuka, () => 0.7, true)).toEqual({ chance: 1, followed: true, word: "kopi", share: 5 / 6 }); // no dice
-    expect(follow([], () => 0)).toEqual({ chance: 0, followed: false }); // nothing taught: babble
+    // 3 votes for 2 next words: each gives up ¾, so he follows (3 − 1½) / 3 = ½ of the time
+    const kopi = { votes: 3, options: 2, chance: 0.5, roll: 0, followed: true, word: "kopi", picked: 2, pickAt: 0, share: 5 / 6 };
+    expect(follow(afterAkuSuka, () => 0)).toEqual(kopi);
+    const rolls = [0.1, 0.9]; // follow (0.1 < ½), then pick at 0.9: past kopi's 5 of 6, 0.4 of the way into teh's 1
+    const teh = follow(afterAkuSuka, () => rolls.shift()!);
+    expect(teh).toMatchObject({ chance: 0.5, roll: 0.1, followed: true, word: "teh", picked: 1, share: 1 / 6 });
+    expect(teh.pickAt).toBeCloseTo(0.4);
+    expect(follow(afterAkuSuka, () => 0.7)).toEqual({ votes: 3, options: 2, chance: 0.5, roll: 0.7, followed: false }); // 1 time in 2 Ohm backs off
+    const always = follow(afterAkuSuka, () => 0.7, true); // talking from evidence: no dice, the 0.7 is the pick
+    expect(always).toMatchObject({ chance: 1, followed: true, word: "kopi", share: 5 / 6 });
+    expect(always.roll).toBeUndefined();
+    expect(follow([], () => 0)).toEqual({ votes: 0, options: 0, chance: 0, followed: false }); // nothing taught: babble
   });
 
   it("counts one visitor's pair once, however many words came before it", () => {
@@ -125,7 +131,7 @@ describe("reply", () => {
     say("hujan kopi suka"); // Rina typed "kopi suka" twice, after different words: still one visitor
     expect(count(sql, "SELECT count AS n FROM pairs WHERE p1 = 'kopi' AND next = 'suka'")).toBe(1);
     // Someone continued "kopi", so Ohm follows it: he only babbles after a word nobody continued.
-    expect(reply(sql, ["kopi"], DRY, () => 0)!.why.steps[0].tried[1]).toEqual({ rung: "word", chance: 1, followed: true });
+    expect(reply(sql, ["kopi"], DRY, () => 0)!.why.steps[0].tried[1]).toEqual({ rung: "word", votes: 1, options: 1, chance: 1, followed: true });
   });
 
   it("counts a pair twice once two visitors typed it, even after different words", () => {
@@ -177,9 +183,10 @@ describe("why", () => {
         on: DRY,
         seed: { word: "aku", from: "topic" },
         steps: [
-          { word: "suka", tried: [{ rung: "pair", chance: 0.75, followed: true }], share: 1 },
-          { word: "kopi", tried: [{ rung: "pair", chance: 0.5, followed: true }], share: 5 / 6 }, // teh has the other 1/6
-          { word: "</s>", tried: [{ rung: "pair", chance: 0.625, followed: true }], share: 1 },
+          { word: "suka", tried: [{ rung: "pair", votes: 3, options: 1, chance: 0.75, roll: 0, followed: true }], picked: 3, pickAt: 0, share: 1 },
+          // 3 votes for 2 words: kopi has 2 − ¾ of the 3 − 1½ kept, teh has the other 1/6
+          { word: "kopi", tried: [{ rung: "pair", votes: 3, options: 2, chance: 0.5, roll: 0, followed: true }], picked: 2, pickAt: 0, share: 5 / 6 },
+          { word: "</s>", tried: [{ rung: "pair", votes: 2, options: 1, chance: 0.625, roll: 0, followed: true }], picked: 2, pickAt: 0, share: 1 },
         ],
       },
     });
@@ -190,14 +197,25 @@ describe("why", () => {
     for (let i = 0; i < 30; i++) say("aku suka teh", CITRA); // the visitor rule: still one visitor
     const rolls = [0, 0, 0, 0.9]; // follow, pick suka, follow, then pick at 0.9: past kopi's 5 of 6
     const { steps } = reply(sql, ["aku"], DRY, () => rolls.shift() ?? 0)!.why;
-    expect(steps[1]).toEqual({ word: "teh", tried: [{ rung: "pair", chance: 0.5, followed: true }], share: 1 / 6 });
+    expect(steps[1]).toMatchObject({ word: "teh", tried: [{ rung: "pair", chance: 0.5, roll: 0, followed: true }], picked: 1, share: 1 / 6 });
+    expect(steps[1].pickAt).toBeCloseTo(0.4); // the pick die landed 0.4 of the way into teh's part
   });
 
   it("shows babble: nothing taught after a word, and the chance to stop", () => {
     for (let i = 0; i < 5; i++) say("aku suka kopi"); // 15 words heard, 5 sentence ends
     sql.exec("INSERT INTO words (word, langs, uses) VALUES ('hujan', 'id', 0)"); // approved on the admin page: no patterns yet
     expect(reply(sql, ["hujan"], DRY, () => 0)!.why.steps).toEqual([
-      { word: "</s>", tried: [{ rung: "pair", chance: 0, followed: false }, { rung: "word", chance: 0, followed: false }], stop: 0.25 },
+      {
+        word: "</s>",
+        tried: [
+          { rung: "pair", votes: 0, options: 0, chance: 0, followed: false },
+          { rung: "word", votes: 0, options: 0, chance: 0, followed: false },
+        ],
+        stop: 0.25, // 5 sentence ends among 15 words + 5 ends
+        ends: 5,
+        heard: 20,
+        stopRoll: 0,
+      },
     ]);
   });
 });
@@ -232,7 +250,8 @@ describe("answers", () => {
     const { text, why } = reply(sql, ["kabar"], DRY, () => 0)!;
     expect(text).toBe("baik");
     expect(why.seed).toMatchObject({ word: "baik", from: "answer", cue: "kabar" });
-    expect(why.seed.lift).toBeCloseTo(1.875); // 8 of 8 "kabar" exchanges were answered "baik", 8 of all 15
+    // 8 of the 8 "kabar" exchanges were answered "baik", against 8 of all 16: lift 2, from the counts as they are now
+    expect(why.seed).toMatchObject({ counts: { n: 8, of: 8, all: 8, total: 16 }, lift: 2 });
     expect(why.quote).toEqual({ words: ["baik"], times: 8 });
   });
 
@@ -359,8 +378,18 @@ describe("grounding", () => {
     const rainy = reply(sql, ["xyz"], RAIN, () => 0)!;
     expect(rainy.text.split(" ")[0]).toBe("hujan");
     expect(rainy.why.seed).toMatchObject({ word: "hujan", from: "situation", situation: "rain" });
-    expect(rainy.why.seed.lift).toBeGreaterThan(1);
+    // 2 of hujan's 2 sightings were in the rain, against 2 of all 32 sightings: 16 times more likely
+    expect(rainy.why.seed).toMatchObject({ counts: { n: 2, of: 2, all: 2, total: 32 }, lift: 16 });
+    expect(rainy.why.seed.roll).toBeUndefined(); // no topic to choose from
     expect(reply(sql, ["xyz"], DRY, () => 0)!.why.seed).toEqual({ word: "aku", from: "random" }); // no dry-weather word
+  });
+
+  it("rolls a die between his situation and your topic", () => {
+    background();
+    say("hujan", visitor(1), RAIN);
+    say("hujan", visitor(2), RAIN);
+    expect(reply(sql, ["kopi"], RAIN, () => 0.1)!.why.seed).toMatchObject({ word: "hujan", from: "situation", roll: 0.1 });
+    expect(reply(sql, ["kopi"], RAIN, () => 0.5)!.why.seed).toEqual({ word: "kopi", from: "topic", roll: 0.5 }); // 0.5 isn't below 0.3
   });
 });
 

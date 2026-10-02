@@ -61,6 +61,13 @@ export function relink(sql: SqlStorage, mind: Mind, word: string) {
 export const linkOf = (sql: SqlStorage, word: string) =>
   sql.exec<{ situation: Situation }>("SELECT situation FROM links WHERE word = ?", word).toArray()[0]?.situation;
 
+/** The counts behind a word's lift in a situation, as they are now (`why` shows them): see Why in protocol.ts. */
+export function situationCounts(sql: SqlStorage, mind: Mind, word: string, situation: Situation) {
+  const n = sql.exec<{ n: number }>("SELECT n FROM word_ctx WHERE word = ? AND situation = ?", word, situation).toArray()[0]?.n ?? 0;
+  const of = sql.exec<{ seen: number }>("SELECT seen FROM words WHERE word = ?", word).one().seen;
+  return { n, of, all: mind.seenIn[situation] ?? 0, total: mind.sightings };
+}
+
 /** The word most clearly tied to what's on right now, if Ohm has one, with its situation and lift. */
 export function situationWord(sql: SqlStorage, on: Situation[]) {
   if (on.length === 0) return undefined;

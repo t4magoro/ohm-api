@@ -3,11 +3,11 @@
 // babbles where he has no evidence and speaks in sentences where he has. Every rule here was tested in
 // ohm-app/research/brain_sim.ipynb. Word + situation links are in grounding.ts, answers in answers.ts, the skills
 // in mind.ts, the tables in schema.ts; which words are allowed is decided in words.ts.
-import { answerTo, countQuestions, isQuestion, keepAnswer, learnAnswer, quoteFor } from "./answers";
-import { countSighting, linkOf, relink, situationWord } from "./grounding";
+import { answerCounts, answerTo, countQuestions, isQuestion, keepAnswer, learnAnswer, quoteFor } from "./answers";
+import { countSighting, linkOf, relink, situationCounts, situationWord } from "./grounding";
 import { kvGet } from "./kv";
 import { bump, loadMind, saveMind, type Mind } from "./mind";
-import type { Brain, Why, WhyStep } from "./protocol";
+import { DISCOUNT, SITUATION_CHANCE, type Brain, type Why, type WhyStep } from "./protocol";
 import type { Situation } from "./situation";
 import { math } from "./wasm";
 import { hasBlocked, squash, type Lexicon } from "./words";
@@ -16,15 +16,16 @@ const START = "<s>";
 const END = "</s>";
 const MAX_REPLY = 12; // words in one reply
 const MAX_WEIGHTS = 4096; // must match pet.cpp
-const D = 0.75; // the discount: every count loses ¾ (brain_sim.ipynb, 19a, checked on the test worlds in 24)
 const HOUR = 3_600_000;
-const SITUATION_CHANCE = 0.3; // personality: how often Ohm talks about his situation instead of your topic
 const ASK_CHANCE = 0.25; // personality: how often he asks back when he has no answer for you (brain_sim.ipynb, 18)
 
 type Who = { id: string; name: string; ipHash: string };
 type Row = { next: string; count: number };
+type Followed = Omit<WhyStep["tried"][number], "rung"> & Pick<WhyStep, "share" | "picked" | "pickAt"> & { word?: string };
 
 const exists = (sql: SqlStorage, query: string, ...params: string[]) => sql.exec(query, ...params).toArray().length > 0;
+/** Ohm's dice, 0 to 1. Unpredictable, unlike Math.random, so the rolls `why` shows can't foretell his next ones. */
+const dice = () => crypto.getRandomValues(new Uint32Array(1))[0] / 2 ** 32;
 
 /**
  * Ohm hears a message, as typed. Every word is stored in one spelling ("gak" → "tidak"), and how it was spelled
@@ -177,12 +178,12 @@ function learnPatterns(sql: SqlStorage, words: string[], ipHash: string) {
   }
 }
 
-/** Picks a row with probability proportional to its count. The picking itself runs in C++. */
-export function pickWeighted<T extends { count: number }>(rows: T[], random: () => number): T | undefined {
+/** Picks a row with probability proportional to its count, where the die `r` (0–1) lands. The picking runs in C++. */
+export function pickWeighted<T extends { count: number }>(rows: T[], r: number): T | undefined {
   const n = Math.min(rows.length, MAX_WEIGHTS);
   // Safe to keep this view: pet.cpp never allocates, so the WebAssembly memory never grows or moves.
   new Int32Array(math.memory.buffer, math.weights_ptr(), n).set(rows.slice(0, n).map((r) => r.count));
-  const i = math.pick_weighted(n, random());
+  const i = math.pick_weighted(n, r);
   return i < 0 ? undefined : rows[i];
 }
 
@@ -191,16 +192,24 @@ export function pickWeighted<T extends { count: number }>(rows: T[], random: () 
  * three quarters, so Ohm learns from anyone, like a toddler, but a pattern one visitor typed keeps a quarter vote
  * and one two visitors typed has five quarters (brain_sim.ipynb, 19a). The context is followed with probability
  * (total − ¾ rows) / total; the rest goes to the back-off. `always` follows whenever anyone continued the context
- * (19e). Counted in quarters, 4 × count − 3, so the weights stay whole numbers for the C++ pick. Also returns that
- * chance and, when Ohm followed, the word's share of the weights: the numbers the site shows in "why".
+ * (19e). Counted in quarters, 4 × count − 3, so the weights stay whole numbers for the C++ pick. Also returns
+ * everything the site shows in "why": the votes and options, the chance, the dice, and the picked word's votes,
+ * share and where in its part the pick die landed (WhyStep in protocol.ts).
  */
-export function follow(rows: Row[], random: () => number, always = false) {
+export function follow(rows: Row[], random: () => number, always = false): Followed {
   const weights = rows.map((r) => ({ next: r.next, count: 4 * r.count - 3 }));
   const kept = weights.reduce((sum, w) => sum + w.count, 0);
-  const chance = kept <= 0 ? 0 : always ? 1 : kept / (kept + 3 * rows.length); // kept + 3 × rows = 4 × total
-  if (kept <= 0 || (!always && random() >= chance)) return { chance, followed: false };
-  const pick = pickWeighted(weights, random)!; // every weight is at least 1
-  return { chance, followed: true, word: pick.next, share: pick.count / kept };
+  const counted = { votes: rows.reduce((sum, r) => sum + r.count, 0), options: rows.length };
+  if (kept <= 0) return { ...counted, chance: 0, followed: false };
+  const chance = always ? 1 : kept / (kept + 3 * rows.length); // kept + 3 × rows = 4 × total
+  const roll = always ? undefined : random();
+  if (roll !== undefined && roll >= chance) return { ...counted, chance, roll, followed: false };
+  const r = random();
+  const pick = pickWeighted(weights, r)!; // every weight is at least 1
+  const i = weights.indexOf(pick);
+  const before = weights.slice(0, i).reduce((sum, w) => sum + w.count, 0);
+  const pickAt = Math.min(Math.max((r * kept - before) / pick.count, 0), 0.999); // float rounding can step out of [0, 1)
+  return { ...counted, chance, roll, followed: true, word: pick.next, picked: rows[i].count, pickAt, share: pick.count / kept };
 }
 
 /**
@@ -216,7 +225,7 @@ function guess(sql: SqlStorage, p2: string, p1: string, stop: number, vocab: num
     if (rows.length === 0) return below;
     const total = rows.reduce((sum, r) => sum + r.count, 0);
     const count = rows.find((r) => r.next === w)?.count ?? 0;
-    return Math.max(count - D, 0) / total + ((D * rows.length) / total) * below;
+    return Math.max(count - DISCOUNT, 0) / total + ((DISCOUNT * rows.length) / total) * below;
   };
   const chance = (w: string) => mix(tri, w, mix(bi, w, w === END ? stop : (1 - stop) / vocab));
   const words = [...new Set([END, ...tri.map((r) => r.next), ...bi.map((r) => r.next)])].sort();
@@ -246,13 +255,15 @@ function nextWord(sql: SqlStorage, mind: Mind, p2: string, p1: string, random: (
   ] as const;
   const tried: WhyStep["tried"] = [];
   for (const [rung, query, params] of rungs) {
-    const { chance, followed, word, share } = follow(sql.exec<Row>(query, ...params).toArray(), random, rung === "word");
-    tried.push({ rung, chance, followed });
-    if (word) return { word, tried, share };
+    const { word, share, picked, pickAt, ...rest } = follow(sql.exec<Row>(query, ...params).toArray(), random, rung === "word");
+    tried.push({ rung, ...rest });
+    if (word) return { word, tried, share, picked, pickAt };
   }
   // Babble: stop as often as real sentences end, otherwise say any word Ohm knows.
   const stop = stopChance(mind);
-  return { word: random() < stop ? END : randomWord(sql, random), tried, stop };
+  const stopRoll = random();
+  const said = { ends: mind.ends, heard: mind.tokens + mind.ends, stopRoll };
+  return { word: stopRoll < stop ? END : randomWord(sql, random), tried, stop, ...said };
 }
 
 /** How often babble stops: as often as the sentences Ohm heard ended. */
@@ -271,10 +282,11 @@ function startWord(sql: SqlStorage, heard: string[], on: Situation[], random: ()
     : undefined;
   // Or, sometimes, what's on his mind: the word most clearly tied to his situation right now.
   const felt = situationWord(sql, on);
-  return felt && (!topic || random() < SITUATION_CHANCE)
-    ? { ...felt, from: "situation" }
+  const roll = felt && topic ? random() : undefined; // with only one of them, there's nothing to choose
+  return felt && (roll === undefined || roll < SITUATION_CHANCE)
+    ? { ...felt, from: "situation", roll }
     : topic
-      ? { word: topic, from: "topic" }
+      ? { word: topic, from: "topic", roll }
       : { word: randomWord(sql, random), from: "random" };
 }
 
@@ -282,18 +294,21 @@ function startWord(sql: SqlStorage, heard: string[], on: Situation[], random: ()
  * Ohm answers, using only words he has learned, and how he built the answer. Null while he knows no words.
  * If your message has a cue he has learned an answer to, he starts from that answer, and says a whole answer
  * people gave when one fits (answers.ts). If not, and you didn't ask him anything, he sometimes asks you
- * something back. `words` is what he said in stored spellings, for learning from your answer to it.
+ * something back. `words` is what he said in stored spellings, for learning from your answer to it. A seed with a
+ * lift also gets the counts behind it, as they are now, and the lift from them, so the site's sums add up.
  */
-export function reply(sql: SqlStorage, heard: string[], on: Situation[], random: () => number = Math.random) {
+export function reply(sql: SqlStorage, heard: string[], on: Situation[], random: () => number = dice) {
   if (!exists(sql, "SELECT 1 FROM words LIMIT 1")) return null;
   const mind = loadMind(sql);
   const link = answerTo(sql, heard);
   const questions = Object.entries(mind.questions).map(([next, count]) => ({ next, count }));
   const seed: Why["seed"] = link
-    ? { word: link.answer, from: "answer", cue: link.cue, lift: link.lift }
+    ? { word: link.answer, from: "answer", cue: link.cue, counts: answerCounts(sql, mind, link) }
     : questions.length > 0 && !isQuestion(heard) && random() < ASK_CHANCE
-      ? { word: pickWeighted(questions, random)!.next, from: "ask" }
+      ? { word: pickWeighted(questions, random())!.next, from: "ask" }
       : startWord(sql, heard, on, random);
+  if (seed.from === "situation") seed.counts = situationCounts(sql, mind, seed.word, seed.situation!);
+  if (seed.counts) seed.lift = seed.counts.n / seed.counts.of / (seed.counts.all / seed.counts.total);
 
   const quote = link && quoteFor(sql, link);
   const words = quote ? quote.text.split(" ") : [seed.word];
