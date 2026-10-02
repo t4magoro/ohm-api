@@ -190,6 +190,9 @@ describe("why", () => {
         ],
         // Then to the left of "aku": all 3 started a sentence with "aku suka", so a sentence starts here
         back: [{ word: "<s>", tried: [{ rung: "pair", votes: 3, options: 1, chance: 0.75, roll: 0, followed: true }], picked: 3, pickAt: 0, share: 1 }],
+        // The same dice every time, so 5 equal tries: both pairs typed by 2+ visitors, and the first one wins
+        tries: Array.from({ length: 5 }, () => ({ words: ["aku", "suka", "kopi"], crowd: [true, true] })),
+        chosen: 0,      
       },
     });
   });
@@ -204,13 +207,14 @@ describe("why", () => {
     expect(why.back![0].tried[0]).toEqual({ rung: "pair", votes: 2, options: 1, chance: 0.625, roll: 0, followed: true });
   });
 
-  it("gives one visitor's word a quarter vote, however often they repeat it", () => {
+  it("says the best of 5 tries: one visitor's words lose to what two people typed, however often they repeat them", () => {
     example();
     for (let i = 0; i < 30; i++) say("aku suka teh", CITRA); // the visitor rule: still one visitor
-    const rolls = [0, 0, 0, 0.9]; // follow, pick suka, follow, then pick at 0.9: past kopi's 5 of 6
-    const { steps } = reply(sql, ["aku"], DRY, () => rolls.shift() ?? 0)!.why;
-    expect(steps[1]).toMatchObject({ word: "teh", tried: [{ rung: "pair", chance: 0.5, roll: 0, followed: true }], picked: 1, share: 1 / 6 });
-    expect(steps[1].pickAt).toBeCloseTo(0.4); // the pick die landed 0.4 of the way into teh's part
+    const rolls = [0, 0, 0, 0.9]; // the first try: follow, pick suka, follow, then pick at 0.9: past kopi's 5 of 6
+    const { text, why } = reply(sql, ["aku"], DRY, () => rolls.shift() ?? 0)!;
+    expect(why.tries![0]).toEqual({ words: ["aku", "suka", "teh"], crowd: [true, false] }); // only Citra typed "suka teh"
+    expect(why.tries![1]).toEqual({ words: ["aku", "suka", "kopi"], crowd: [true, true] }); // Rina and Budi typed both
+    expect([text, why.chosen]).toEqual(["aku suka kopi", 1]);
   });
 
   it("shows babble: nothing taught after a word, and the chance to stop", () => {
@@ -275,6 +279,7 @@ describe("answers", () => {
     const { text, why } = reply(sql, ["kabar"], DRY, () => 0)!;
     expect(text.split(" ")[0]).toBe("baik");
     expect(why.quote).toBeUndefined();
+    expect(why.tries).toBeUndefined(); // an answer is one try: best of 5 is only measured for the other starts
   });
 
   it("the most specific cue wins: a pair he knows overrules its single words", () => {

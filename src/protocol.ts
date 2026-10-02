@@ -96,6 +96,13 @@ export type Why = {
    * the rungs are the 2 words after it and the word after it, and "<s>" = a sentence starts here, so he stopped.
    */
   back?: WhyStep[];
+  /**
+   * Best of 5 (when he grew left): every try he made from the same seed, in order, and for each of its word pairs
+   * whether 2+ visitors typed it (`crowd`, one per pair). He said the try at `chosen`: the biggest share of crowd
+   * pairs, then the most words, then the earliest. `steps` and `back` are that try's.
+   */
+  tries?: { words: string[]; crowd: boolean[] }[];
+  chosen?: number;
   quote?: { words: string[]; times: number };
 };
 /** Something Ohm said, in reply to a visitor. Visitors' own messages are never shown to others. */
