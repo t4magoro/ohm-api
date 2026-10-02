@@ -5,6 +5,7 @@
 // in mind.ts, the tables in schema.ts; which words are allowed is decided in words.ts.
 import { answerTo, countQuestions, isQuestion, keepAnswer, learnAnswer, quoteFor } from "./answers";
 import { countSighting, linkOf, relink, situationWord } from "./grounding";
+import { kvGet } from "./kv";
 import { bump, loadMind, saveMind, type Mind } from "./mind";
 import type { Brain, Why, WhyStep } from "./protocol";
 import type { Situation } from "./situation";
@@ -15,6 +16,8 @@ const START = "<s>";
 const END = "</s>";
 const MAX_REPLY = 12; // words in one reply
 const MAX_WEIGHTS = 4096; // must match pet.cpp
+const D = 0.75; // the discount: every count loses ¾ (brain_sim.ipynb, 19a, checked on the test worlds in 24)
+const HOUR = 3_600_000;
 const SITUATION_CHANCE = 0.3; // personality: how often Ohm talks about his situation instead of your topic
 const ASK_CHANCE = 0.25; // personality: how often he asks back when he has no answer for you (brain_sim.ipynb, 18)
 
@@ -32,7 +35,8 @@ const exists = (sql: SqlStorage, query: string, ...params: string[]) => sql.exec
  * blocked word rejects everything. The visitor rule: a count only goes up when a different visitor than last
  * time typed it. Patterns count visitors by IP hash, so one person (or one Wi-Fi) repeating a sentence can't make
  * it count more. Situation sightings and answers count browsers, so friends on one Wi-Fi can each teach Ohm what
- * a word goes with, and what to answer.
+ * a word goes with, and what to answer. And a word is sighted at most once per clock hour: messages in one hour
+ * all share one weather, so a teaching drill can't link its words to it (brain_sim.ipynb, section 20).
  */
 export function hear(
   sql: SqlStorage,
@@ -49,15 +53,34 @@ export function hear(
 
   // 1. The test, on what Ohm knew before this message.
   const browser = who.id || who.ipHash; // a socket that never said hello counts as its IP
+  const hour = Math.floor(now / HOUR);
   const lastBy = new Map<string, string | null>(); // known word → the browser whose sighting last counted
+  const lastHour = new Map<string, number | null>(); // known word → the clock hour of that sighting
   for (const w of new Set(words)) {
-    const row = sql.exec<{ seen_by: string | null }>("SELECT seen_by FROM words WHERE word = ?", w).toArray()[0];
-    if (row) lastBy.set(w, row.seen_by);
+    const row = sql
+      .exec<{ seen_by: string | null; last_hour: number | null }>("SELECT seen_by, last_hour FROM words WHERE word = ?", w)
+      .toArray()[0];
+    if (!row) continue;
+    lastBy.set(w, row.seen_by);
+    lastHour.set(w, row.last_hour);
   }
   for (const w of words) {
     bump(mind, "words", lastBy.has(w));
     const link = lastBy.has(w) ? linkOf(sql, w) : undefined;
     if (link) bump(mind, "context", on.includes(link));
+  }
+  // Guessing: before each word he knows, and each sentence end, was his best guess right? A word he doesn't know
+  // breaks the sentence, as in learning (brain_sim.ipynb, section 22).
+  const known: string[][] = [[]];
+  for (const w of words) {
+    if (lastBy.has(w)) known.at(-1)!.push(w);
+    else known.push([]);
+  }
+  const stop = stopChance(mind);
+  const vocab = (kvGet<Omit<Brain, "skills">>(sql, "brain") ?? brainStats(sql)).vocab; // the cached count: 1 row read
+  for (const piece of known.filter((p) => p.length > 0)) {
+    const t = [START, START, ...piece, END];
+    for (let i = 2; i < t.length; i++) bump(mind, "guessing", guess(sql, t[i - 2], t[i - 1], stop, vocab) === t[i]);
   }
 
   // 2. Answers: what this visitor wrote right after Ohm talked to them, also on what he knew before.
@@ -69,12 +92,17 @@ export function hear(
   const pieces: string[][] = [[]];
   for (const w of words) {
     if (lastBy.has(w)) {
-      const counts = lastBy.get(w) !== browser;
-      sql.exec("UPDATE words SET uses = uses + 1, seen = seen + ?, seen_by = ? WHERE word = ?", counts ? 1 : 0, browser, w);
-      if (counts) sighted.push(w);
+      if (lastBy.get(w) !== browser && lastHour.get(w) !== hour) {
+        sql.exec("UPDATE words SET uses = uses + 1, seen = seen + 1, seen_by = ?, last_hour = ? WHERE word = ?", browser, hour, w);
+        sighted.push(w);
+        lastBy.set(w, browser);
+      } else {
+        sql.exec("UPDATE words SET uses = uses + 1 WHERE word = ?", w);
+      }
     } else if (lexicon.langsOf(w).length > 0) {
       sql.exec(
-        "INSERT INTO words (word, langs, by_id, by_name, ip_hash, at, uses, seen, seen_by) VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?)",
+        `INSERT INTO words (word, langs, by_id, by_name, ip_hash, at, uses, seen, seen_by, last_hour)
+         VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?, ?)`,
         w,
         lexicon.langsOf(w).join(","),
         who.id,
@@ -82,9 +110,11 @@ export function hear(
         who.ipHash,
         now,
         browser,
+        hour,
       );
       learned.push(w);
       sighted.push(w);
+      lastBy.set(w, browser);
     } else {
       sql.exec(
         "INSERT INTO pending (word, seen, first_seen) VALUES (?, 1, ?) ON CONFLICT (word) DO UPDATE SET seen = seen + 1",
@@ -94,7 +124,6 @@ export function hear(
       pieces.push([]); // never link two words across one Ohm doesn't know
       continue;
     }
-    lastBy.set(w, browser);
     pieces.at(-1)!.push(w);
   }
   for (const piece of pieces) {
@@ -158,20 +187,40 @@ export function pickWeighted<T extends { count: number }>(rows: T[], random: () 
 }
 
 /**
- * Continues from one context, or backs off to a shorter one (absolute discounting with D = ½): every count loses
- * half, so Ohm learns from anyone, like a toddler, but a pattern one visitor typed keeps half a vote and one two
- * visitors typed has three halves (brain_sim.ipynb, section 10c). The context is followed with probability
- * (total − rows / 2) / total; the rest goes to the back-off. Counted in halves, 2 × count − 1, so the weights stay
- * whole numbers for the C++ pick. Also returns that chance and, when Ohm followed, the word's share of the
- * weights: the numbers the site shows in "why".
+ * Continues from one context, or backs off to a shorter one (absolute discounting with D = ¾): every count loses
+ * three quarters, so Ohm learns from anyone, like a toddler, but a pattern one visitor typed keeps a quarter vote
+ * and one two visitors typed has five quarters (brain_sim.ipynb, 19a). The context is followed with probability
+ * (total − ¾ rows) / total; the rest goes to the back-off. `always` follows whenever anyone continued the context
+ * (19e). Counted in quarters, 4 × count − 3, so the weights stay whole numbers for the C++ pick. Also returns that
+ * chance and, when Ohm followed, the word's share of the weights: the numbers the site shows in "why".
  */
-export function follow(rows: Row[], random: () => number) {
-  const weights = rows.map((r) => ({ next: r.next, count: 2 * r.count - 1 }));
+export function follow(rows: Row[], random: () => number, always = false) {
+  const weights = rows.map((r) => ({ next: r.next, count: 4 * r.count - 3 }));
   const kept = weights.reduce((sum, w) => sum + w.count, 0);
-  const chance = kept > 0 ? kept / (kept + rows.length) : 0; // kept + rows = 2 × total
-  if (kept <= 0 || random() >= chance) return { chance, followed: false };
+  const chance = kept <= 0 ? 0 : always ? 1 : kept / (kept + 3 * rows.length); // kept + 3 × rows = 4 × total
+  if (kept <= 0 || (!always && random() >= chance)) return { chance, followed: false };
   const pick = pickWeighted(weights, random)!; // every weight is at least 1
   return { chance, followed: true, word: pick.next, share: pick.count / kept };
+}
+
+/**
+ * Ohm's best guess for the word after (p2, p1), for the guessing skill: the most likely word in his model, the same
+ * D = ¾ steps as follow() (brain_sim.ipynb, section 22). Babble spreads its share over every word he knows, so the
+ * best guess is always a word someone typed here, or the end. Ties go to the first in alphabetical order.
+ */
+function guess(sql: SqlStorage, p2: string, p1: string, stop: number, vocab: number) {
+  const tri = sql.exec<Row>("SELECT next, count FROM grams WHERE p2 = ? AND p1 = ?", p2, p1).toArray();
+  const bi = sql.exec<Row>("SELECT next, count FROM pairs WHERE p1 = ?", p1).toArray();
+  // A context's own share of w, plus what it passes down times the back-off's chance of w.
+  const mix = (rows: Row[], w: string, below: number) => {
+    if (rows.length === 0) return below;
+    const total = rows.reduce((sum, r) => sum + r.count, 0);
+    const count = rows.find((r) => r.next === w)?.count ?? 0;
+    return Math.max(count - D, 0) / total + ((D * rows.length) / total) * below;
+  };
+  const chance = (w: string) => mix(tri, w, mix(bi, w, w === END ? stop : (1 - stop) / vocab));
+  const words = [...new Set([END, ...tri.map((r) => r.next), ...bi.map((r) => r.next)])].sort();
+  return words.reduce((best, w) => (chance(w) > chance(best) ? w : best));
 }
 
 /** Any word Ohm knows. A random rowid reads 1 row, where ORDER BY random() would read the whole table. */
@@ -187,6 +236,8 @@ function randomWord(sql: SqlStorage, random: () => number) {
  * The next word, and how Ohm got it: from the last two words, else the last word, else babble. The last word
  * has its own counts (pairs), with the visitor rule, so a pair one visitor typed after different words ("aku kopi
  * enak", "kamu kopi enak") still counts once. Adding up the triples would count it twice: brain_sim.ipynb, 10b.
+ * Ohm talks from evidence: he always follows a last word anyone continued, and only babbles after a word nobody
+ * did (19e). The dice at the last word are for predicting people, not for talking: rolling them made him babble.
  */
 function nextWord(sql: SqlStorage, mind: Mind, p2: string, p1: string, random: () => number): WhyStep {
   const rungs = [
@@ -195,14 +246,19 @@ function nextWord(sql: SqlStorage, mind: Mind, p2: string, p1: string, random: (
   ] as const;
   const tried: WhyStep["tried"] = [];
   for (const [rung, query, params] of rungs) {
-    const { chance, followed, word, share } = follow(sql.exec<Row>(query, ...params).toArray(), random);
+    const { chance, followed, word, share } = follow(sql.exec<Row>(query, ...params).toArray(), random, rung === "word");
     tried.push({ rung, chance, followed });
     if (word) return { word, tried, share };
   }
   // Babble: stop as often as real sentences end, otherwise say any word Ohm knows.
-  const heard = mind.tokens + mind.ends;
-  const stop = heard ? mind.ends / heard : 1;
+  const stop = stopChance(mind);
   return { word: random() < stop ? END : randomWord(sql, random), tried, stop };
+}
+
+/** How often babble stops: as often as the sentences Ohm heard ended. */
+function stopChance(mind: Mind) {
+  const heard = mind.tokens + mind.ends;
+  return heard ? mind.ends / heard : 1;
 }
 
 /** Where Ohm starts when he has no answer for you: your topic, his situation, or a random word. */
@@ -246,13 +302,11 @@ export function reply(sql: SqlStorage, heard: string[], on: Situation[], random:
   while (!quote && words.length < MAX_REPLY) {
     const step = nextWord(sql, mind, p2, p1, random);
     steps.push(step);
-    bump(mind, "sentences", step.stop === undefined); // the skill: how much of what Ohm says follows a pattern people taught him
     if (step.word === END) break;
     words.push(step.word);
     [p2, p1] = [p1, step.word];
   }
   for (const w of new Set(words)) sql.exec("UPDATE words SET said = said + 1 WHERE word = ?", w);
-  saveMind(sql, mind);
   const babbleOnly = !quote && steps.every((s) => s.stop !== undefined);
   const why: Why = quote ? { on, seed, steps, quote: { words, times: quote.n } } : { on, seed, steps };
   return { text: babbleOnly ? `${words.join(" ")} beep` : words.join(" "), words, why };

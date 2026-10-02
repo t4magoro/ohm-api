@@ -24,7 +24,7 @@ export function loadMind(sql: SqlStorage): Mind {
   const saved = kvGet<Mind>(sql, "mind");
   // A mind saved before these were added has none of them yet.
   const added = { spellings: {}, spellBy: {}, exchanges: 0, questions: {} };
-  const fresh = { words: 0, sentences: 0, context: 0, expression: 0, conversation: 0 };
+  const fresh = { words: 0, guessing: 0, context: 0, expression: 0, conversation: 0 };
   if (saved) return { ...added, ...saved, skills: { ...fresh, ...saved.skills } };
   return {
     ...added,

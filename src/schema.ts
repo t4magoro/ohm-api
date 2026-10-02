@@ -1,6 +1,14 @@
 // Every table Ohm uses, and every change to them over time. Each step runs once, in order,
 // so the live database (which already has older tables) and a brand-new one end up the same.
 // Never edit a step that already ran on the live Ohm: add a new step instead.
+import type { Situation } from "./protocol";
+
+// Step 11's clean-up: words a teaching drill (several friends, one afternoon) linked to the wrong situation, and every
+// situation that existed then.
+const DRILLED = "('banget', 'kabar', 'bagaimana', 'dulu', 'alhamdulillah')";
+const SITUATIONS: Situation[] = [
+  "rain", "hot", "pagi", "siang", "sore", "malam", "battery_low", "mood_low", "charge", "play", "reboot",
+];
 const STEPS: string[][] = [
   // 1: Phases 1–3a
   [
@@ -81,6 +89,24 @@ const STEPS: string[][] = [
   ],
   // 10: the conversation skill in the hourly snapshot
   ["ALTER TABLE snapshots ADD COLUMN skill_conversation REAL"],
+  // 11 (brain v3): a word counts as one situation sighting per clock hour at most (brain.ts, hear), and the guessing
+  // skill replaces sentences in the snapshots and in the mind. Then a one-time clean-up: the rule can't fix the
+  // sightings a drill already left (word_ctx has no times), so the drilled words' sightings come out of every count,
+  // the mind's totals included, as if never seen. They relearn from scratch (brain_sim.ipynb, section 20).
+  [
+    "ALTER TABLE words ADD COLUMN last_hour INTEGER",
+    "ALTER TABLE snapshots ADD COLUMN skill_guessing REAL",
+    ...SITUATIONS.map(
+      (s) => `UPDATE kv SET value = json_set(value, '$.seenIn.${s}', json_extract(value, '$.seenIn.${s}') -
+        (SELECT COALESCE(SUM(n), 0) FROM word_ctx WHERE situation = '${s}' AND word IN ${DRILLED}))
+        WHERE key = 'mind' AND json_extract(value, '$.seenIn.${s}') IS NOT NULL`,
+    ),
+    `UPDATE kv SET value = json_remove(json_set(value, '$.sightings', json_extract(value, '$.sightings') -
+       (SELECT COALESCE(SUM(seen), 0) FROM words WHERE word IN ${DRILLED})), '$.skills.sentences') WHERE key = 'mind'`,
+    `UPDATE words SET seen = 0, seen_by = NULL WHERE word IN ${DRILLED}`,
+    `DELETE FROM word_ctx WHERE word IN ${DRILLED}`,
+    `DELETE FROM links WHERE word IN ${DRILLED}`,
+  ],
 ];
 
 /** Runs the steps that haven't run yet. Tests pass `upTo` to build an older Ohm. */

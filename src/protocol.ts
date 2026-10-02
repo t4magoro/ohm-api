@@ -24,7 +24,7 @@ export const DEFAULT_SETTINGS: Settings = { chargeHours: 20, moodHours: 12.5 };
 export const HOURS_RANGE = [1, 168] as const; // one hour to one week
 
 /** How well Ohm does, 0 to 1. Measured on every message before he learns from it. */
-export type Skills = { words: number; sentences: number; context: number; expression: number; conversation: number };
+export type Skills = { words: number; guessing: number; context: number; expression: number; conversation: number };
 
 /** What's happening around Ohm (situation.ts): weather, Bandung's part of the day, low stats, what a visitor just did. */
 export type Care = "charge" | "play" | "reboot";
@@ -107,16 +107,18 @@ export type ServerMsg =
 
 /** One hourly reading for the Vitals charts. `at` is the start of the hour. */
 /**
- * One hourly reading. `skills` is null in snapshots from before brain v2, and `skills.conversation` in snapshots
- * from before it was measured: not measured, which isn't the same as 0.
- */
+ * One hourly reading. `skills` is null in snapshots from before brain v2, and a skill is null in snapshots from when
+ * it wasn't measured, which isn't the same as 0: `conversation` before it existed, `guessing` before brain v3, and
+ * `sentences` from brain v3 on (guessing replaced it). */
 export type Snapshot = {
   at: number;
   charge: number;
   mood: number;
   vocab: number;
   online: number;
-  skills: (Omit<Skills, "conversation"> & { conversation: number | null }) | null;
+  skills:
+    | (Omit<Skills, "guessing" | "conversation"> & Record<"sentences" | "guessing" | "conversation", number | null>)
+    | null;
 };
 
 /** How far a milestone is. `etaDays` is at this week's pace: null once unlocked, or with no progress. */

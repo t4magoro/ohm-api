@@ -22,16 +22,20 @@ const RINA = visitor(1);
 const BUDI = visitor(2);
 const CITRA = visitor(3);
 const T0 = Date.UTC(2026, 9, 1);
+const HOUR = 3_600_000;
 const DRY: Situation[] = ["siang"];
 const RAIN: Situation[] = ["siang", "rain"];
 // A tiny lexicon: "badword" stands in for a real blocked word.
 const lexicon = makeLexicon({ id: "aku\nsuka\nkopi\nhujan\nteh\ntidak\ngak\napa\nkabar\nbaik\nmakan\nnasi\nlagi", en: "i\nlike\ncoffee\nkopi" }, "badword");
 
 let sql: SqlStorage;
+let now = T0;
 beforeEach(() => {
   sql = testSql();
+  now = T0;
 });
-const say = (text: string, who = RINA, on = DRY) => hear(sql, lexicon, text.split(" "), who, T0, on);
+// Each message an hour after the last: a word is sighted at most once per clock hour (that rule has its own test).
+const say = (text: string, who = RINA, on = DRY) => hear(sql, lexicon, text.split(" "), who, (now += HOUR), on);
 
 describe("hear", () => {
   it("learns allowed words and remembers who taught them", () => {
@@ -73,9 +77,15 @@ describe("hear", () => {
 
   it("scores each message before learning from it", () => {
     say("aku suka"); // both words new: two misses, no known pair yet
-    expect(skills(sql)).toEqual({ words: 0, sentences: 0, context: 0, expression: 0, conversation: 0 });
+    expect(skills(sql)).toEqual({ words: 0, guessing: 0, context: 0, expression: 0, conversation: 0 });
     say("aku suka kopi", BUDI); // aku, suka known (hit, hit), kopi new (miss);
     expect(skills(sql).words).toBeCloseTo(0.019701);
+  });
+
+  it("guesses each next word before learning it", () => {
+    say("aku suka kopi"); // nothing known yet: nothing to guess
+    say("aku suka", BUDI); // "aku" first, then "suka": right; then he guessed "kopi", not the end: wrong
+    expect(skills(sql).guessing).toBeCloseTo(0.019701);
   });
 });
 
@@ -84,29 +94,29 @@ describe("reply", () => {
     expect(reply(sql, ["halo"], DRY)).toBeNull();
   });
 
-  it("learns a sentence from one visitor, with half a vote", () => {
+  it("learns a sentence from one visitor, with a quarter vote", () => {
     for (let i = 0; i < 5; i++) say("aku suka kopi"); // Rina 5 times: still one visitor, every count is 1
     const { text, why } = reply(sql, ["aku"], DRY, () => 0)!;
     expect(text).toBe("aku suka kopi");
-    expect(why.steps[0].tried[0].chance).toBe(0.5); // (1 − ½) / 1
-    expect(skills(sql).sentences).toBeCloseTo(0.029701); // suka, kopi and the end all came from patterns: 3 hits
+    expect(why.steps[0].tried[0].chance).toBe(0.25); // (1 − ¾) / 1
   });
 
   it("trusts a pattern more once two visitors typed it", () => {
     say("aku suka kopi");
     say("aku suka kopi", BUDI);
-    expect(reply(sql, ["aku"], DRY, () => 0)!.why.steps[0].tried[0].chance).toBe(0.75); // (2 − ½) / 2
+    expect(reply(sql, ["aku"], DRY, () => 0)!.why.steps[0].tried[0].chance).toBe(0.625); // (2 − ¾) / 2: five times one visitor's quarter
   });
 
-  it("gives one visitor's word half a vote, even after a well-known start", () => {
+  it("gives one visitor's word a quarter vote, even after a well-known start", () => {
     const afterAkuSuka = [
-      { next: "kopi", count: 2 }, // Rina and Budi: 1½ votes
-      { next: "teh", count: 1 }, // Citra: ½ vote
+      { next: "kopi", count: 2 }, // Rina and Budi: 1¼ votes
+      { next: "teh", count: 1 }, // Citra: ¼ vote
     ];
-    expect(follow(afterAkuSuka, () => 0)).toEqual({ chance: 2 / 3, followed: true, word: "kopi", share: 0.75 });
-    const rolls = [0.1, 0.9]; // follow (0.1 < 2/3), then pick at 0.9: past kopi's 3 of 4
-    expect(follow(afterAkuSuka, () => rolls.shift()!)).toEqual({ chance: 2 / 3, followed: true, word: "teh", share: 0.25 });
-    expect(follow(afterAkuSuka, () => 0.7)).toEqual({ chance: 2 / 3, followed: false }); // 1 time in 3 Ohm backs off to "suka" alone
+    expect(follow(afterAkuSuka, () => 0)).toEqual({ chance: 0.5, followed: true, word: "kopi", share: 5 / 6 });
+    const rolls = [0.1, 0.9]; // follow (0.1 < ½), then pick at 0.9: past kopi's 5 of 6
+    expect(follow(afterAkuSuka, () => rolls.shift()!)).toEqual({ chance: 0.5, followed: true, word: "teh", share: 1 / 6 });
+    expect(follow(afterAkuSuka, () => 0.7)).toEqual({ chance: 0.5, followed: false }); // 1 time in 2 Ohm backs off to "suka" alone
+    expect(follow(afterAkuSuka, () => 0.7, true)).toEqual({ chance: 1, followed: true, word: "kopi", share: 5 / 6 }); // no dice
     expect(follow([], () => 0)).toEqual({ chance: 0, followed: false }); // nothing taught: babble
   });
 
@@ -114,13 +124,14 @@ describe("reply", () => {
     say("aku kopi suka");
     say("hujan kopi suka"); // Rina typed "kopi suka" twice, after different words: still one visitor
     expect(count(sql, "SELECT count AS n FROM pairs WHERE p1 = 'kopi' AND next = 'suka'")).toBe(1);
-    expect(reply(sql, ["kopi"], DRY, () => 0)!.why.steps[0].tried[1]).toEqual({ rung: "word", chance: 0.5, followed: true });
+    // Someone continued "kopi", so Ohm follows it: he only babbles after a word nobody continued.
+    expect(reply(sql, ["kopi"], DRY, () => 0)!.why.steps[0].tried[1]).toEqual({ rung: "word", chance: 1, followed: true });
   });
 
   it("counts a pair twice once two visitors typed it, even after different words", () => {
     say("aku kopi suka");
     say("hujan kopi suka", BUDI); // no triple has 2 visitors, but the pair "kopi suka" does
-    expect(reply(sql, ["kopi"], DRY, () => 0)!.why.steps[0].tried[1]).toEqual({ rung: "word", chance: 0.75, followed: true });
+    expect(count(sql, "SELECT count AS n FROM pairs WHERE p1 = 'kopi' AND next = 'suka'")).toBe(2);
   });
 
   it("counts how often Ohm said each word", () => {
@@ -166,20 +177,20 @@ describe("why", () => {
         on: DRY,
         seed: { word: "aku", from: "topic" },
         steps: [
-          { word: "suka", tried: [{ rung: "pair", chance: 5 / 6, followed: true }], share: 1 },
-          { word: "kopi", tried: [{ rung: "pair", chance: 2 / 3, followed: true }], share: 0.75 }, // teh has the other ¼
-          { word: "</s>", tried: [{ rung: "pair", chance: 3 / 4, followed: true }], share: 1 },
+          { word: "suka", tried: [{ rung: "pair", chance: 0.75, followed: true }], share: 1 },
+          { word: "kopi", tried: [{ rung: "pair", chance: 0.5, followed: true }], share: 5 / 6 }, // teh has the other 1/6
+          { word: "</s>", tried: [{ rung: "pair", chance: 0.625, followed: true }], share: 1 },
         ],
       },
     });
   });
 
-  it("gives one visitor's word half a vote, however often they repeat it", () => {
+  it("gives one visitor's word a quarter vote, however often they repeat it", () => {
     example();
     for (let i = 0; i < 30; i++) say("aku suka teh", CITRA); // the visitor rule: still one visitor
-    const rolls = [0, 0, 0, 0.9]; // follow, pick suka, follow, then pick at 0.9: past kopi's 3 of 4
+    const rolls = [0, 0, 0, 0.9]; // follow, pick suka, follow, then pick at 0.9: past kopi's 5 of 6
     const { steps } = reply(sql, ["aku"], DRY, () => rolls.shift() ?? 0)!.why;
-    expect(steps[1]).toEqual({ word: "teh", tried: [{ rung: "pair", chance: 2 / 3, followed: true }], share: 0.25 });
+    expect(steps[1]).toEqual({ word: "teh", tried: [{ rung: "pair", chance: 0.5, followed: true }], share: 1 / 6 });
   });
 
   it("shows babble: nothing taught after a word, and the chance to stop", () => {
@@ -305,6 +316,17 @@ describe("grounding", () => {
     expect(sql.exec("SELECT word, situation FROM links").toArray()).toEqual([{ word: "hujan", situation: "rain" }]);
   });
 
+  it("counts a word once per clock hour, so a drill in one hour can't link it", () => {
+    background();
+    const drill = (who: typeof RINA, minute: number) => hear(sql, lexicon, ["hujan"], who, now + minute * 60_000, RAIN);
+    drill(visitor(1), 1);
+    drill(visitor(2), 30); // another friend, the same hour: no new sighting
+    expect(sql.exec("SELECT seen FROM words WHERE word = 'hujan'").one()).toEqual({ seen: 1 });
+    expect(count(sql, "SELECT COUNT(*) AS n FROM links")).toBe(0);
+    drill(visitor(2), 61); // the next hour
+    expect(sql.exec("SELECT word, situation FROM links").toArray()).toEqual([{ word: "hujan", situation: "rain" }]);
+  });
+
   it("never links from a single sighting, however rare the situation", () => {
     for (let i = 10; i < 40; i++) say("aku suka kopi", visitor(i)); // 90 dry sightings
     say("hujan", visitor(1), RAIN); // alone, G² would be 11.0: past 10.83
@@ -369,9 +391,9 @@ describe("mind", () => {
   });
 
   it("a mind saved before a skill existed starts it at 0", () => {
-    const old = { skills: { words: 0.5, sentences: 0.5, context: 0.5, expression: 0.5 }, tokens: 1, ends: 1, sightings: 0, seenIn: {} };
+    const old = { skills: { words: 0.5, context: 0.5, expression: 0.5 }, tokens: 1, ends: 1, sightings: 0, seenIn: {} };
     sql.exec("INSERT INTO kv (key, value) VALUES ('mind', ?)", JSON.stringify(old));
-    expect(skills(sql)).toEqual({ ...old.skills, conversation: 0 });
+    expect(skills(sql)).toEqual({ ...old.skills, guessing: 0, conversation: 0 });
   });
 });
 

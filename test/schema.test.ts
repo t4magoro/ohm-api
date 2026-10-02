@@ -10,13 +10,13 @@ describe("migrate", () => {
     old.exec("INSERT INTO events (at, type, who_id, who_name) VALUES (1, 'charge', 'x', 'IQBAL')");
     migrate(old);
     expect(old.exec("SELECT who_name, detail FROM events").one()).toEqual({ who_name: "IQBAL", detail: null });
-    expect(old.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "10" });
+    expect(old.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "11" });
   });
 
   it("runs each step once, so running it again changes nothing", () => {
     const sql = testSql(); // testSql() already migrated once
     migrate(sql);
-    expect(sql.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "10" });
+    expect(sql.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "11" });
   });
 
   it("step 6 drops the links that rest on one sighting", () => {
@@ -34,6 +34,28 @@ describe("migrate", () => {
     migrate(sql);
     expect(sql.exec("SELECT COUNT(*) AS n FROM pairs").one()).toEqual({ n: 0 });
     expect(sql.exec("SELECT name FROM sqlite_master WHERE name = 'grams_p1_next'").toArray()).toEqual([]);
+  });
+
+  it("step 11 takes the drilled words' sightings out of every count, as if they were never seen", () => {
+    const sql = emptySql();
+    migrate(sql, 10); // like the live Ohm, which stopped at step 10
+    sql.exec("INSERT INTO words (word, langs, seen, seen_by) VALUES ('kabar', 'id', 3, 'rina'), ('hujan', 'id', 2, 'budi')");
+    sql.exec("INSERT INTO word_ctx (word, situation, n) VALUES ('kabar', 'hot', 3), ('kabar', 'siang', 2), ('hujan', 'rain', 2)");
+    sql.exec("INSERT INTO links (word, situation, g2, lift) VALUES ('kabar', 'hot', 12, 3.1), ('hujan', 'rain', 15, 6)");
+    const mind = { skills: { words: 0.5, sentences: 0.8 }, sightings: 5, seenIn: { hot: 3, siang: 4, rain: 2 } };
+    sql.exec("INSERT INTO kv (key, value) VALUES ('mind', ?)", JSON.stringify(mind));
+    migrate(sql);
+    expect(JSON.parse(sql.exec<{ value: string }>("SELECT value FROM kv WHERE key = 'mind'").one().value)).toEqual({
+      skills: { words: 0.5 }, // guessing replaces sentences
+      sightings: 2,
+      seenIn: { hot: 0, siang: 2, rain: 2 },
+    });
+    expect(sql.exec("SELECT word, seen, seen_by FROM words ORDER BY word").toArray()).toEqual([
+      { word: "hujan", seen: 2, seen_by: "budi" },
+      { word: "kabar", seen: 0, seen_by: null },
+    ]);
+    expect(sql.exec("SELECT DISTINCT word FROM word_ctx").toArray()).toEqual([{ word: "hujan" }]);
+    expect(sql.exec("SELECT word FROM links").toArray()).toEqual([{ word: "hujan" }]);
   });
 
   it("step 8 rebuilds the pairs from the triples, never counting more visitors than typed them", () => {
