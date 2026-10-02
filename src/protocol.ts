@@ -41,25 +41,43 @@ export const MILESTONES = [
 export type MilestoneId = (typeof MILESTONES)[number]["id"];
 export type Counts = (typeof MILESTONES)[number]["counts"];
 
+/** Every count loses this much of a vote (brain.ts; brain_sim.ipynb 19a, 24): one person's words keep ¼. The site's sums use it. */
+export const DISCOUNT = 0.75;
+/** How often Ohm talks about his situation instead of your topic, when he has a word for both (brain.ts). */
+export const SITUATION_CHANCE = 0.3;
+
 /**
- * How Ohm chose one word of a reply. He tries the last two words ("pair"), then the last word ("word"):
- * `chance` is how often he follows what people taught there, (total − rows / 2) / total. The rung he followed
- * made the word, with `share` = its weight (count − ½) / all weights there. If he followed none, he babbled:
- * stopped with chance `stop`, or said a random word he knows. "</s>" = he stopped here.
- * The line's text can add "zzz…" (asleep) or "beep" (all babble), so build the words from `seed` and `steps`.
+ * How Ohm chose one word of a reply. He tries the last two words ("pair"), then the last word ("word"). A rung has
+ * `votes` (its counts, with the visitor rule) for `options` different next words. Each option gives up DISCOUNT of
+ * a vote to "something new", so he follows with `chance` = (votes − DISCOUNT × options) / votes, when his die
+ * (`roll`, 0–1) lands below it. At the last word he always follows when anyone continued it: chance 1, no roll.
+ * The rung he followed made the word: it has `picked` votes, so `share` = (picked − DISCOUNT) / (votes − DISCOUNT ×
+ * options), and `pickAt` (0–1) is where in its part the pick die landed. If he followed none, he babbled: he
+ * stopped when `stopRoll` < `stop` = `ends` / `heard` (sentence ends among all the words and ends he heard), or
+ * said a random word he knows. "</s>" = he stopped here. His dice come from crypto.getRandomValues, so showing
+ * them says nothing about his next rolls. The line's text can add "zzz…" (asleep) or "beep" (all babble), so build
+ * the words from `seed` and `steps`.
  */
 export type WhyStep = {
   word: string;
-  tried: { rung: "pair" | "word"; chance: number; followed: boolean }[];
+  tried: { rung: "pair" | "word"; chance: number; followed: boolean; votes: number; options: number; roll?: number }[];
   share?: number;
+  picked?: number;
+  pickAt?: number;
   stop?: number;
+  ends?: number;
+  heard?: number;
+  stopRoll?: number;
 };
 /**
  * How Ohm built a reply: what was on, where he started, then every word. Sent with the live line, never stored.
  * The seed is your rarest word (topic), the word tied to his situation (with that link's lift), a random word,
  * the answer word to a `cue` in your message (with that link's lift: how many times more often people answer the
  * cue with it), or a question word when he asks back. `quote`: he said a whole answer people gave to the cue,
- * `times` times (then `steps` is empty).
+ * `times` times (then `steps` is empty). `counts` are the numbers behind the lift, as they are now: `n` of the
+ * word's `of` sightings were in the situation (or `n` of the cue's `of` exchanges were answered with the word),
+ * against `all` of `total` for every word, so lift = (n / of) / (all / total). `roll`: when he had both a situation
+ * word and your topic, his die for the situation (yes when it's below SITUATION_CHANCE).
  */
 export type Why = {
   on: Situation[];
@@ -69,6 +87,8 @@ export type Why = {
     situation?: Situation;
     lift?: number;
     cue?: string;
+    counts?: { n: number; of: number; all: number; total: number };
+    roll?: number;
   };
   steps: WhyStep[];
   quote?: { words: string[]; times: number };
@@ -105,11 +125,11 @@ export type ServerMsg =
   | { t: "notice"; msg: string }
   | { t: "error"; msg: string };
 
-/** One hourly reading for the Vitals charts. `at` is the start of the hour. */
 /**
- * One hourly reading. `skills` is null in snapshots from before brain v2, and a skill is null in snapshots from when
- * it wasn't measured, which isn't the same as 0: `conversation` before it existed, `guessing` before brain v3, and
- * `sentences` from brain v3 on (guessing replaced it). */
+ * One hourly reading for the Vitals charts. `at` is the start of the hour. `skills` is null in snapshots from before
+ * brain v2, and a skill is null in snapshots from when it wasn't measured, which isn't the same as 0: `conversation`
+ * before it existed, `guessing` before brain v3, and `sentences` from brain v3 on (guessing replaced it).
+ */
 export type Snapshot = {
   at: number;
   charge: number;
