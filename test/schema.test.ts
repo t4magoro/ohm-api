@@ -10,13 +10,13 @@ describe("migrate", () => {
     old.exec("INSERT INTO events (at, type, who_id, who_name) VALUES (1, 'charge', 'x', 'IQBAL')");
     migrate(old);
     expect(old.exec("SELECT who_name, detail FROM events").one()).toEqual({ who_name: "IQBAL", detail: null });
-    expect(old.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "11" });
+    expect(old.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "12" });
   });
 
   it("runs each step once, so running it again changes nothing", () => {
     const sql = testSql(); // testSql() already migrated once
     migrate(sql);
-    expect(sql.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "11" });
+    expect(sql.exec("SELECT value FROM kv WHERE key = 'schema'").one()).toEqual({ value: "12" });
   });
 
   it("step 6 drops the links that rest on one sighting", () => {
@@ -31,7 +31,7 @@ describe("migrate", () => {
   it("step 7 gives the one-word back-off its own table and drops the index nothing reads", () => {
     const sql = emptySql();
     migrate(sql, 6); // like the live Ohm, which stopped at step 6
-    migrate(sql);
+    migrate(sql, 7); // step 12 adds this index back
     expect(sql.exec("SELECT COUNT(*) AS n FROM pairs").one()).toEqual({ n: 0 });
     expect(sql.exec("SELECT name FROM sqlite_master WHERE name = 'grams_p1_next'").toArray()).toEqual([]);
   });
@@ -58,6 +58,21 @@ describe("migrate", () => {
     expect(sql.exec("SELECT word FROM links").toArray()).toEqual([{ word: "hujan" }]);
   });
 
+  it("step 12 starts the pairs at <s>, from the sentence starts Ohm already had", () => {
+    const sql = emptySql();
+    migrate(sql, 11); // like the live Ohm, which stopped at step 11
+    const gram = (p2: string, p1: string, next: string, n: number, by: string | null) =>
+      sql.exec("INSERT INTO grams (p2, p1, next, count, last_by) VALUES (?, ?, ?, ?, ?)", p2, p1, next, n, by);
+    gram("<s>", "<s>", "aku", 3, "citra"); // 3 visitors started with "aku"
+    gram("<s>", "<s>", "halo", 5, null); // from before the visitor rule: not copied, like step 8
+    gram("<s>", "aku", "suka", 2, "budi"); // not a sentence start
+    sql.exec("INSERT INTO pairs (p1, next, count, last_by) VALUES ('<s>', 'aku', 4, 'eko')"); // learned after step 12 ran
+    migrate(sql);
+    expect(sql.exec("SELECT p1, next, count FROM pairs ORDER BY next").toArray()).toEqual([{ p1: "<s>", next: "aku", count: 4 }]);
+    const indexes = sql.exec("SELECT name FROM sqlite_master WHERE name IN ('grams_p1_next', 'pairs_next') ORDER BY name").toArray();
+    expect(indexes).toEqual([{ name: "grams_p1_next" }, { name: "pairs_next" }]);
+  });
+
   it("step 8 rebuilds the pairs from the triples, never counting more visitors than typed them", () => {
     const sql = emptySql();
     migrate(sql, 7); // like the live Ohm, which stopped at step 7
@@ -71,7 +86,7 @@ describe("migrate", () => {
     gram("dia", "kopi", "pahit", 1, "budi"); // kopi pahit: Budi and Dewi, but each triple says 1
     gram("kita", "kopi", "pahit", 1, "dewi");
     sql.exec("INSERT INTO pairs (p1, next, count, last_by) VALUES ('suka', 'kopi', 1, 'eko')"); // learned after step 7
-    migrate(sql);
+    migrate(sql, 8); // step 12 adds the <s> pairs
     expect(sql.exec("SELECT p1, next, count FROM pairs ORDER BY p1, next").toArray()).toEqual([
       { p1: "aku", next: "suka", count: 3 },
       { p1: "kopi", next: "enak", count: 1 },

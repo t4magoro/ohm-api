@@ -56,7 +56,7 @@ export const SITUATION_CHANCE = 0.3;
  * stopped when `stopRoll` < `stop` = `ends` / `heard` (sentence ends among all the words and ends he heard), or
  * said a random word he knows. "</s>" = he stopped here. His dice come from crypto.getRandomValues, so showing
  * them says nothing about his next rolls. The line's text can add "zzz…" (asleep) or "beep" (all babble), so build
- * the words from `seed` and `steps`.
+ * the words from `seed`, `steps` and `back`.
  */
 export type WhyStep = {
   word: string;
@@ -91,6 +91,11 @@ export type Why = {
     roll?: number;
   };
   steps: WhyStep[];
+  /**
+   * Words he added before the seed afterwards (growing to the left), nearest first. The same as `steps`, mirrored:
+   * the rungs are the 2 words after it and the word after it, and "<s>" = a sentence starts here, so he stopped.
+   */
+  back?: WhyStep[];
   quote?: { words: string[]; times: number };
 };
 /** Something Ohm said, in reply to a visitor. Visitors' own messages are never shown to others. */

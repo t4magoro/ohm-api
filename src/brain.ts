@@ -18,6 +18,7 @@ const MAX_REPLY = 12; // words in one reply
 const MAX_WEIGHTS = 4096; // must match pet.cpp
 const HOUR = 3_600_000;
 const ASK_CHANCE = 0.25; // personality: how often he asks back when he has no answer for you (brain_sim.ipynb, 18)
+const GROWS_LEFT = new Set<Why["seed"]["from"]>(["topic", "situation", "random"]); // what 19c measured
 
 type Who = { id: string; name: string; ipHash: string };
 type Row = { next: string; count: number };
@@ -152,7 +153,7 @@ export function hear(
 }
 
 // "aku suka kopi" → triples (<s>,<s>)→aku, (<s>,aku)→suka, (aku,suka)→kopi, (suka,kopi)→</s>,
-// and pairs aku→suka, suka→kopi, kopi→</s> for the one-word back-off.
+// and pairs <s>→aku, aku→suka, suka→kopi, kopi→</s> for the one-word back-off (and <s>→aku for growing left).
 // Each count goes up by 1, unless the same visitor raised it last time (then nothing is written).
 function learnPatterns(sql: SqlStorage, words: string[], ipHash: string) {
   const t = [START, START, ...words, END];
@@ -166,7 +167,6 @@ function learnPatterns(sql: SqlStorage, words: string[], ipHash: string) {
       t[i],
       ipHash,
     );
-    if (t[i - 1] === START) continue; // Ohm always starts from a word, so he never backs off to <s> alone
     sql.exec(
       `INSERT INTO pairs (p1, next, count, last_by) VALUES (?, ?, 1, ?)
        ON CONFLICT (p1, next) DO UPDATE SET count = count + 1, last_by = excluded.last_by
@@ -242,29 +242,53 @@ function randomWord(sql: SqlStorage, random: () => number) {
 }
 
 /**
- * The next word, and how Ohm got it: from the last two words, else the last word, else babble. The last word
- * has its own counts (pairs), with the visitor rule, so a pair one visitor typed after different words ("aku kopi
- * enak", "kamu kopi enak") still counts once. Adding up the triples would count it twice: brain_sim.ipynb, 10b.
- * Ohm talks from evidence: he always follows a last word anyone continued, and only babbles after a word nobody
- * did (19e). The dice at the last word are for predicting people, not for talking: rolling them made him babble.
+ * One more word, and how Ohm got it: from 2 words, else 1 word, else babble. The single word has its own counts
+ * (pairs), with the visitor rule, so a pair one visitor typed after different words ("aku kopi enak", "kamu kopi
+ * enak") still counts once. Adding up the triples would count it twice: brain_sim.ipynb, 10b. Ohm talks from
+ * evidence: he always follows a single word anyone continued, and only babbles after a word nobody did (19e). The
+ * dice there are for predicting people, not for talking: rolling them made him babble. `edge` is where babble
+ * stops: the end of the sentence going right, its start going left. Each row's `next` is the word it gives.
  */
-function nextWord(sql: SqlStorage, mind: Mind, p2: string, p1: string, random: () => number): WhyStep {
-  const rungs = [
-    ["pair", `SELECT next, count FROM grams WHERE p2 = ? AND p1 = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, [p2, p1]],
-    ["word", `SELECT next, count FROM pairs WHERE p1 = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, [p1]],
-  ] as const;
+function climb(sql: SqlStorage, mind: Mind, rungs: Rungs, edge: string, random: () => number): WhyStep {
   const tried: WhyStep["tried"] = [];
   for (const [rung, query, params] of rungs) {
     const { word, share, picked, pickAt, ...rest } = follow(sql.exec<Row>(query, ...params).toArray(), random, rung === "word");
     tried.push({ rung, ...rest });
     if (word) return { word, tried, share, picked, pickAt };
   }
-  // Babble: stop as often as real sentences end, otherwise say any word Ohm knows.
+  // Babble: stop as often as real sentences end (or start), otherwise say any word Ohm knows.
   const stop = stopChance(mind);
   const stopRoll = random();
   const said = { ends: mind.ends, heard: mind.tokens + mind.ends, stopRoll };
-  return { word: stopRoll < stop ? END : randomWord(sql, random), tried, stop, ...said };
+  return { word: stopRoll < stop ? edge : randomWord(sql, random), tried, stop, ...said };
 }
+type Rungs = readonly (readonly ["pair" | "word", string, readonly string[]])[];
+
+/** The word after his last two, p2 and p1. */
+const nextWord = (sql: SqlStorage, mind: Mind, p2: string, p1: string, random: () => number) =>
+  climb(
+    sql,
+    mind,
+    [
+      ["pair", `SELECT next, count FROM grams WHERE p2 = ? AND p1 = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, [p2, p1]],
+      ["word", `SELECT next, count FROM pairs WHERE p1 = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, [p1]],
+    ],
+    END,
+    random,
+  );
+
+/** Growing to the left (19c): the word before his first two, a and then b, the mirror of nextWord. "<s>" = a sentence starts here. */
+const prevWord = (sql: SqlStorage, mind: Mind, a: string, b: string, random: () => number) =>
+  climb(
+    sql,
+    mind,
+    [
+      ["pair", `SELECT p2 AS next, count FROM grams WHERE p1 = ? AND next = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, [a, b]],
+      ["word", `SELECT p1 AS next, count FROM pairs WHERE next = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, [a]],
+    ],
+    START,
+    random,
+  );
 
 /** How often babble stops: as often as the sentences Ohm heard ended. */
 function stopChance(mind: Mind) {
@@ -294,8 +318,9 @@ function startWord(sql: SqlStorage, heard: string[], on: Situation[], random: ()
  * Ohm answers, using only words he has learned, and how he built the answer. Null while he knows no words.
  * If your message has a cue he has learned an answer to, he starts from that answer, and says a whole answer
  * people gave when one fits (answers.ts). If not, and you didn't ask him anything, he sometimes asks you
- * something back. `words` is what he said in stored spellings, for learning from your answer to it. A seed with a
- * lift also gets the counts behind it, as they are now, and the lift from them, so the site's sums add up.
+ * something back. Then a reply that started from your word, his situation or a random word grows to the left, the
+ * way people start sentences (19c). `words` is what he said in stored spellings, for learning from your answer to
+ * it. A seed with a lift also gets the counts behind it, as they are now, and the lift from them, so the sums add up.
  */
 export function reply(sql: SqlStorage, heard: string[], on: Situation[], random: () => number = dice) {
   if (!exists(sql, "SELECT 1 FROM words LIMIT 1")) return null;
@@ -321,9 +346,21 @@ export function reply(sql: SqlStorage, heard: string[], on: Situation[], random:
     words.push(step.word);
     [p2, p1] = [p1, step.word];
   }
+  // Words before his start, until a sentence starts or the reply is full. Not for answers and asking back: they
+  // start with their word on purpose, and brain_sim.ipynb (19c) only measured the other starts.
+  const back: WhyStep[] = [];
+  let [a, b] = [words[0], words[1] ?? END];
+  while (!quote && GROWS_LEFT.has(seed.from) && words.length < MAX_REPLY) {
+    const step = prevWord(sql, mind, a, b, random);
+    back.push(step);
+    if (step.word === START) break;
+    words.unshift(step.word);
+    [a, b] = [step.word, a];
+  }
   for (const w of new Set(words)) sql.exec("UPDATE words SET said = said + 1 WHERE word = ?", w);
-  const babbleOnly = !quote && steps.every((s) => s.stop !== undefined);
+  const babbleOnly = !quote && [...steps, ...back].every((s) => s.stop !== undefined);
   const why: Why = quote ? { on, seed, steps, quote: { words, times: quote.n } } : { on, seed, steps };
+  if (back.length > 0) why.back = back;
   return { text: babbleOnly ? `${words.join(" ")} beep` : words.join(" "), words, why };
 }
 
@@ -338,6 +375,7 @@ export function inStyle<T extends { text: string; why: Why }>(sql: SqlStorage, l
     seed: seed.cue ? { ...seed, word: say(seed.word), cue: sayAll(seed.cue) } : { ...seed, word: say(seed.word) },
     steps: steps.map((s) => ({ ...s, word: say(s.word) })),
   };
+  if (said.why.back) why.back = said.why.back.map((s) => ({ ...s, word: say(s.word) }));
   if (quote) why.quote = { ...quote, words: quote.words.map(say) };
   return { ...said, text: sayAll(said.text), why };
 }
