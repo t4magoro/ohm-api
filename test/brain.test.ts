@@ -188,8 +188,20 @@ describe("why", () => {
           { word: "kopi", tried: [{ rung: "pair", votes: 3, options: 2, chance: 0.5, roll: 0, followed: true }], picked: 2, pickAt: 0, share: 5 / 6 },
           { word: "</s>", tried: [{ rung: "pair", votes: 2, options: 1, chance: 0.625, roll: 0, followed: true }], picked: 2, pickAt: 0, share: 1 },
         ],
+        // Then to the left of "aku": all 3 started a sentence with "aku suka", so a sentence starts here
+        back: [{ word: "<s>", tried: [{ rung: "pair", votes: 3, options: 1, chance: 0.75, roll: 0, followed: true }], picked: 3, pickAt: 0, share: 1 }],
       },
     });
+  });
+  
+  it("grows a reply to the left, the way people start sentences", () => {
+    say("aku suka kopi");
+    say("aku suka kopi", BUDI);
+    expect(count(sql, "SELECT count AS n FROM pairs WHERE p1 = '<s>' AND next = 'aku'")).toBe(2); // sentences start with "aku"
+    const { text, why } = reply(sql, ["kopi"], DRY, () => 0)!; // nobody starts with "kopi", so he stops after it
+    expect(text).toBe("aku suka kopi"); // and then grows left: suka before "kopi", aku before "suka kopi", then <s>
+    expect(why.back!.map((s) => s.word)).toEqual(["suka", "aku", "<s>"]);
+    expect(why.back![0].tried[0]).toEqual({ rung: "pair", votes: 2, options: 1, chance: 0.625, roll: 0, followed: true });
   });
 
   it("gives one visitor's word a quarter vote, however often they repeat it", () => {

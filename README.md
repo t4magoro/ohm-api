@@ -149,6 +149,15 @@ replies became fluent (every word pair typed by someone) 87% of the time instead
 **Babble** stops as often as real sentences end (`ends / (tokens + ends)`), otherwise it says any known word
 (a random rowid: 1 row read). A reply made only of babble ends with `beep`.
 
+**Growing to the left.** Then Ohm adds words *before* his first word, the mirror of the steps above: the 2 words
+after it (triples read by their last two words), else the word after it (pairs read by their second word, and pairs
+now start at `<s>` too), else babble, until a sentence starts (`<s>`) or the reply has 12 words. So your word can sit
+inside his reply ("nasi" → "aku mau makan nasi"), and replies start the way people start sentences. In the
+simulation (notebook section 19f, with talking from evidence): natural starts 81% → 100%, your word inside the reply
+1% → 56%, fluent 98%. The price: whole copied messages 20% → 32%, about 3.9 more row writes per message (two
+indexes and the `<s>` pairs) and about 12 more reads per reply (section 21). Only replies that start from your word,
+his situation or a random word grow left, which is what was measured; answers and asking back keep their word first.
+
 ### 5. Situations: which words belong where
 
 `situation.ts` turns the moment into on/off facts: the part of the day in Bandung (`pagi`, `siang`, `sore`,
@@ -226,6 +235,7 @@ live `line` message for the site's "think" button:
 - `seed`: where Ohm started: your topic, the word tied to his situation (with that link's lift), a random word,
   the answer to a cue in your message (with the cue and that link's lift), or a question word when he asks back.
 - `quote`: when he said a whole answer people gave, its words and how many times it was given.
+- `back`: the words he grew to the left, nearest first, as steps like below ("<s>" = a sentence starts there).
 - `steps`: for every word, the rungs he tried with their chance (1 at the last word when someone continued it),
   then the share of the word he picked, or, when he babbled, his chance to stop.
 

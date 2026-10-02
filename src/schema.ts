@@ -107,6 +107,17 @@ const STEPS: string[][] = [
     `DELETE FROM word_ctx WHERE word IN ${DRILLED}`,
     `DELETE FROM links WHERE word IN ${DRILLED}`,
   ],
+  // 12 (brain v3): replies grow to the left (brain.ts, prevWord), reading triples by their last two words and pairs
+  // by their second word, so both get an index (a row write more for each new triple and pair). And pairs now start
+  // at <s>, so Ohm knows which words begin sentences: filled from the triples he already had, like step 8 (only
+  // rows with a known visitor). Pairs learned since keep theirs.
+  [
+    "CREATE INDEX IF NOT EXISTS grams_p1_next ON grams (p1, next)",
+    "CREATE INDEX IF NOT EXISTS pairs_next ON pairs (next)",
+    `INSERT INTO pairs (p1, next, count, last_by)
+     SELECT p1, next, count, last_by FROM grams WHERE p2 = '<s>' AND p1 = '<s>' AND last_by IS NOT NULL
+     ON CONFLICT (p1, next) DO NOTHING`,
+  ],
 ];
 
 /** Runs the steps that haven't run yet. Tests pass `upTo` to build an older Ohm. */
