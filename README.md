@@ -158,6 +158,14 @@ simulation (notebook section 19f, with talking from evidence): natural starts 81
 indexes and the `<s>` pairs) and about 12 more reads per reply (section 21). Only replies that start from your word,
 his situation or a random word grow left, which is what was measured; answers and asking back keep their word first.
 
+**Best of 5.** Those same replies are made 5 times from the same start word (each try with its own dice, each grown
+left), and Ohm says the try whose word pairs most people typed: the biggest share of pairs that 2+ visitors typed
+(the `pairs` counts, with the visitor rule), then the most words, then the earliest try. In the simulation (notebook
+section 19f, with talking from evidence and growing left): fluent 100%, pairs typed by 2+ people 74% → 92%, and
+pairs only one person typed 46% → 19%, so it also undoes most of growing left's cost to privacy. The price: about 5
+times the reads per reply (about 150, plus a row read to score each pair once), no extra writes. Not measured:
+Cloudflare CPU time for the 5 tries.
+
 ### 5. Situations: which words belong where
 
 `situation.ts` turns the moment into on/off facts: the part of the day in Bandung (`pagi`, `siang`, `sore`,
@@ -232,17 +240,27 @@ he says bumps a `said` counter, which feeds "Ohm used your words N times".
 **Why Ohm said that.** `reply()` also returns how it built the answer (`Why` in `src/protocol.ts`), sent with the
 live `line` message for the site's "think" button:
 
-- `seed`: where Ohm started: your topic, the word tied to his situation (with that link's lift), a random word,
-  the answer to a cue in your message (with the cue and that link's lift), or a question word when he asks back.
+- `seed`: where Ohm started: your topic, the word tied to his situation, a random word, the answer to a cue in
+  your message, or a question word when he asks back. A lift comes with its counts (`n` of the word's `of`
+  sightings were in the situation, against `all` of `total` for every word; the same for answers), read when he
+  answers and turned into the lift then, so the site's sum adds up. When he had both a situation word and your
+  topic, `roll` is his die for the situation (3 times in 10).
 - `quote`: when he said a whole answer people gave, its words and how many times it was given.
-- `back`: the words he grew to the left, nearest first, as steps like below ("<s>" = a sentence starts there).
-- `steps`: for every word, the rungs he tried with their chance (1 at the last word when someone continued it),
-  then the share of the word he picked, or, when he babbled, his chance to stop.
+- `steps`: for every word, the rungs he tried: their `votes` for `options` different next words, the chance that
+  makes ((votes − ¾ × options) / votes, or 1 at the last word when someone continued it) and where his die landed;
+  then the picked word's votes, its share and where the pick die landed in it; or, when he babbled, his chance to
+  stop (sentence ends ÷ everything he heard) and that die.
+- `back`: the words he grew to the left, nearest first, as steps like those ("<s>" = a sentence starts there).
+- `tries` and `chosen`: best of 5, every try's words and which of its word pairs 2+ visitors typed, and which
+  one he said (`steps` and `back` are that try's).
 
-The numbers are exactly the ones Ohm used, from rows he had already read: no extra request, no extra row read.
-`why` is never stored, so lines that come with the page have none. It only names words Ohm said. Two things it
-does tell everyone: a chance shows how many *different* things people said after those words (never what), and a
-topic seed was in your message.
+The numbers are exactly the ones Ohm used, from rows he had already read, except the lift counts (2 or 3 rows, only
+when he starts from a situation or an answer) and best of 5's pair counts. `why` is never stored, so lines that come
+with the page have none. It names only words Ohm said or nearly said (his other 4 tries, made from the same
+patterns); the other next words at each step are only counted. What it does tell everyone: how many votes and
+different next words there were after the words he said (never which), the counts behind a lift, and that a topic
+seed was in your message. Ohm's dice come from `crypto.getRandomValues`, not `Math.random`, whose next numbers can
+be worked out from a few earlier ones: showing his rolls says nothing about his next ones.
 
 ### 8. Skills: the brain level, measured
 

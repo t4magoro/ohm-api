@@ -18,7 +18,8 @@ const MAX_REPLY = 12; // words in one reply
 const MAX_WEIGHTS = 4096; // must match pet.cpp
 const HOUR = 3_600_000;
 const ASK_CHANCE = 0.25; // personality: how often he asks back when he has no answer for you (brain_sim.ipynb, 18)
-const GROWS_LEFT = new Set<Why["seed"]["from"]>(["topic", "situation", "random"]); // what 19c measured
+const GROWS_LEFT = new Set<Why["seed"]["from"]>(["topic", "situation", "random"]); // what 19c and 19d measured
+const TRIES = 5; // best of 5 (19d)
 
 type Who = { id: string; name: string; ipHash: string };
 type Row = { next: string; count: number };
@@ -318,10 +319,12 @@ function startWord(sql: SqlStorage, heard: string[], on: Situation[], random: ()
  * Ohm answers, using only words he has learned, and how he built the answer. Null while he knows no words.
  * If your message has a cue he has learned an answer to, he starts from that answer, and says a whole answer
  * people gave when one fits (answers.ts). If not, and you didn't ask him anything, he sometimes asks you
- * something back. Then a reply that started from your word, his situation or a random word grows to the left, the
- * way people start sentences (19c). `words` is what he said in stored spellings, for learning from your answer to
- * it. A seed with a lift also gets the counts behind it, as they are now, and the lift from them, so the sums add up.
+ * something back. A reply that started from your word, his situation or a random word also grows to the left, the
+ * way people start sentences (19c), and is the best of 5 tries (19d). `words` is what he said in stored spellings,
+ * for learning from your answer to it. A seed with a lift also gets the counts behind it, as they are now, and the
+ * lift from them, so the sums add up.
  */
+
 export function reply(sql: SqlStorage, heard: string[], on: Situation[], random: () => number = dice) {
   if (!exists(sql, "SELECT 1 FROM words LIMIT 1")) return null;
   const mind = loadMind(sql);
@@ -336,32 +339,74 @@ export function reply(sql: SqlStorage, heard: string[], on: Situation[], random:
   if (seed.counts) seed.lift = seed.counts.n / seed.counts.of / (seed.counts.all / seed.counts.total);
 
   const quote = link && quoteFor(sql, link);
-  const words = quote ? quote.text.split(" ") : [seed.word];
+  if (quote) {
+    const words = quote.text.split(" ");
+    for (const w of new Set(words)) sql.exec("UPDATE words SET said = said + 1 WHERE word = ?", w);
+    return { text: quote.text, words, why: { on, seed, steps: [], quote: { words, times: quote.n } } satisfies Why };
+  }
+  // 5 tries from the same start, and he says the one whose word pairs most people typed (19d). Answers and asking
+  // back make one try and don't grow left: they start with their word on purpose, and brain_sim.ipynb (19c, 19d)
+  // only measured the other starts.
+  const more = GROWS_LEFT.has(seed.from);
+  const tries = Array.from({ length: more ? TRIES : 1 }, () => build(sql, mind, seed.word, more, random));
+  const known = new Map<string, number>(); // pair → its count, so a pair the tries share is read once
+  const scored = tries.map((t) => ({ ...t, crowd: more ? crowd(sql, t.words, known) : [] }));
+  const best = scored.reduce((b, t) => (beats(t, b) ? t : b));
+  const { words, steps, back } = best;
+  for (const w of new Set(words)) sql.exec("UPDATE words SET said = said + 1 WHERE word = ?", w);
+  const babbleOnly = [...steps, ...back].every((s) => s.stop !== undefined);
+  const why: Why = { on, seed, steps };
+  if (back.length > 0) why.back = back;
+  if (more) {
+    why.tries = scored.map((t) => ({ words: t.words, crowd: t.crowd }));
+    why.chosen = scored.indexOf(best);
+  }
+  return { text: babbleOnly ? `${words.join(" ")} beep` : words.join(" "), words, why };
+}
+
+/** One try: the start word, the words after it, then (`grow`) the words before it (19c), with every step's why. */
+function build(sql: SqlStorage, mind: Mind, start: string, grow: boolean, random: () => number) {
+  const words = [start];
   const steps: WhyStep[] = [];
-  let [p2, p1] = [START, seed.word];
-  while (!quote && words.length < MAX_REPLY) {
+  let [p2, p1] = [START, start];
+  while (words.length < MAX_REPLY) {
     const step = nextWord(sql, mind, p2, p1, random);
     steps.push(step);
     if (step.word === END) break;
     words.push(step.word);
     [p2, p1] = [p1, step.word];
   }
-  // Words before his start, until a sentence starts or the reply is full. Not for answers and asking back: they
-  // start with their word on purpose, and brain_sim.ipynb (19c) only measured the other starts.
+  // Words before his start, until a sentence starts or the reply is full.
   const back: WhyStep[] = [];
   let [a, b] = [words[0], words[1] ?? END];
-  while (!quote && GROWS_LEFT.has(seed.from) && words.length < MAX_REPLY) {
+  while (grow && words.length < MAX_REPLY) {
     const step = prevWord(sql, mind, a, b, random);
     back.push(step);
     if (step.word === START) break;
     words.unshift(step.word);
     [a, b] = [step.word, a];
   }
-  for (const w of new Set(words)) sql.exec("UPDATE words SET said = said + 1 WHERE word = ?", w);
-  const babbleOnly = !quote && [...steps, ...back].every((s) => s.stop !== undefined);
-  const why: Why = quote ? { on, seed, steps, quote: { words, times: quote.n } } : { on, seed, steps };
-  if (back.length > 0) why.back = back;
-  return { text: babbleOnly ? `${words.join(" ")} beep` : words.join(" "), words, why };
+  return { words, steps, back };
+}
+
+/**
+ * Best of 5's score (19d): for each word pair of a try, did 2+ visitors type it (pairs, with the visitor rule)?
+ * One row read per pair, each pair once per reply (`known`).
+ */
+function crowd(sql: SqlStorage, words: string[], known: Map<string, number>) {
+  return words.slice(1).map((w, i) => {
+    const pair = `${words[i]} ${w}`;
+    if (!known.has(pair))
+      known.set(pair, sql.exec<{ count: number }>("SELECT count FROM pairs WHERE p1 = ? AND next = ?", words[i], w).toArray()[0]?.count ?? 0);
+    return known.get(pair)! >= 2;
+  });
+}
+
+/** Whether try t beats b: a bigger share of crowd pairs (no pairs: 0), then more words. A tie keeps the earlier try. */
+function beats(t: { crowd: boolean[]; words: string[] }, b: typeof t) {
+  const [ts, bs] = [t.crowd.filter(Boolean).length, b.crowd.filter(Boolean).length];
+  const diff = ts * b.crowd.length - bs * t.crowd.length; // ts / t.pairs vs bs / b.pairs, without fractions
+  return diff > 0 || (diff === 0 && t.words.length > b.words.length);
 }
 
 /** A reply in the spellings most people use with Ohm: "gak" if most write "gak", "tidak" if most write "tidak". */
@@ -376,6 +421,7 @@ export function inStyle<T extends { text: string; why: Why }>(sql: SqlStorage, l
     steps: steps.map((s) => ({ ...s, word: say(s.word) })),
   };
   if (said.why.back) why.back = said.why.back.map((s) => ({ ...s, word: say(s.word) }));
+  if (said.why.tries) why.tries = said.why.tries.map((t) => ({ ...t, words: t.words.map(say) }));
   if (quote) why.quote = { ...quote, words: quote.words.map(say) };
   return { ...said, text: sayAll(said.text), why };
 }
