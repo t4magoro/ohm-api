@@ -3,7 +3,7 @@
   wordlists/id.txt, en.txt  words Ohm may learn by itself (the 30,000 most common of each language)
   wordlists/block.txt       words it must never learn: LDNOOBW's English list + your block-id.txt
 
-Sources: hermitdave/FrequencyWords (MIT, from movie subtitles) and
+Sources: hermitdave/FrequencyWords (code MIT, word lists CC BY-SA 4.0, from movie subtitles) and
 LDNOOBW/List-of-Dirty-Naughty-Obscene-and-Otherwise-Bad-Words (CC BY 4.0).
 
 Run from ohm-api:

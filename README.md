@@ -25,6 +25,8 @@ Everything runs in Docker. You don't need Node on the host.
 | Unit tests | `docker compose exec api npm test` |
 | Typecheck | `docker compose exec api npm run typecheck` |
 | Rebuild word lists | `docker run --rm -v "${PWD}:/app" -w /app python:3.13-alpine python tools/build_wordlists.py` |
+| Rebuild his lines, after editing `lines/ohm.json` | `docker run --rm -v "${PWD}:/app" -w /app node:24-slim node --import ./tools/resolve.mjs tools/build_lines.ts` |
+| Rebuild the Tatoeba counts | See the top of `tools/build_counts.ts` |
 
 For local secrets, copy them into `.dev.vars` (gitignored): `ADMIN_TOKEN`, `IP_SALT`, `FAKE_WEATHER`.
 
@@ -305,6 +307,25 @@ line, and the piece it lands in wins.
 - **Report** (visitor): flags one of Ohm's lines for the admin page. The admin can remove it from everyone's screen (`unsay`).
 - **Forget** (admin, `POST /admin/forget` with `{"text": …}`): Ohm forgets one kept answer under every cue. The admin page lists the newest 50. It can come back if people give it again.
 - **Reset** (admin, `POST /admin/reset` with `{"confirm":"RESET"}`): Ohm forgets everything he learned. The blocklist, bans, reports, past lines, feed, Vitals history and milestones stay.
+
+### 11. What he knows before anyone talks
+
+Ohm doesn't start from nothing. Two read-only files ship inside the Worker and load once per wake. Visitors still only ever
+write to SQLite.
+
+- **His own lines,** `lines/ohm.json`: 99 groups of messages and replies written for him, about who he is, greetings,
+  feelings and small talk. `tools/build_lines.ts` packs them into `src/lines.bin`. A line answers when the closest stored
+  message (BM25, `retrieve.ts`) covers at least half of what you said, you said more than half of it, and it's about the
+  same person (`kamu` or `aku`). Filler like `ih` or `sih`, a few spellings and the name after `nama aku` are ignored when
+  matching. When no line fits, he says he doesn't know yet and asks to be taught.
+- **Word counts from Tatoeba,** `src/base.bin`, from 28,405 Indonesian sentences (`tools/build_counts.ts`). They mix with
+  visitors' counts whenever the chain talks (`base.ts`), and blocking a word hides it there too. They count toward the
+  `guessing` skill but not toward his vocabulary, which is still only what visitors taught.
+
+The chain keeps learning from everyone. Once 3 different people have said the same word after a topic, that lesson speaks
+instead of a line, unless the line itself mentions that word. One person repeating something 100 times still can't make
+him say it. All of this was tested offline before shipping: blind ratings of his replies, and teaching and moderation on
+simulated visitors. The word counts are credited in [CREDITS.md](CREDITS.md).
 
 ### Known limitations
 

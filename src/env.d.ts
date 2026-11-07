@@ -4,6 +4,12 @@ declare module "*.wasm" {
   export default mod;
 }
 
+// Read-only data (src/*.bin): wrangler bundles them as bytes.
+declare module "*.bin" {
+  const data: ArrayBuffer;
+  export default data;
+}
+
 // Word lists (wordlists/*.txt): wrangler bundles them as plain text.
 declare module "*.txt" {
   const text: string;

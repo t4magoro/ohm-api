@@ -4,11 +4,13 @@
 // ohm-app/research/brain_sim.ipynb. Word + situation links are in grounding.ts, answers in answers.ts, the skills
 // in mind.ts, the tables in schema.ts; which words are allowed is decided in words.ts.
 import { answerCounts, answerTo, countQuestions, isQuestion, keepAnswer, learnAnswer, quoteFor } from "./answers";
+import { base, hidden, loadHidden, mixed, mixing, type Base } from "./base";
 import { countSighting, linkOf, relink, situationCounts, situationWord } from "./grounding";
 import { kvGet } from "./kv";
 import { bump, loadMind, saveMind, type Mind } from "./mind";
 import { DISCOUNT, SITUATION_CHANCE, type Brain, type Why, type WhyStep } from "./protocol";
 import type { Situation } from "./situation";
+import { retriever, tidy } from "./retrieve";
 import { math } from "./wasm";
 import { hasBlocked, squash, type Lexicon } from "./words";
 
@@ -76,11 +78,12 @@ export function hear(
   // breaks the sentence, as in learning (brain_sim.ipynb, section 22).
   const known: string[][] = [[]];
   for (const w of words) {
-    if (lastBy.has(w)) known.at(-1)!.push(w);
+    if (lastBy.has(w) || base?.has(w)) known.at(-1)!.push(w);
     else known.push([]);
   }
   const stop = stopChance(mind);
-  const vocab = (kvGet<Omit<Brain, "skills">>(sql, "brain") ?? brainStats(sql)).vocab; // the cached count: 1 row read
+  // ponytail: a word in both layers counts twice here, and that only touches the uniform fallback's tiny share
+  const vocab = (kvGet<Omit<Brain, "skills">>(sql, "brain") ?? brainStats(sql)).vocab + (base?.vocab ?? 0); // the cached count: 1 row read
   for (const piece of known.filter((p) => p.length > 0)) {
     const t = [START, START, ...piece, END];
     for (let i = 2; i < t.length; i++) bump(mind, "guessing", guess(sql, t[i - 2], t[i - 1], stop, vocab) === t[i]);
@@ -213,28 +216,75 @@ export function follow(rows: Row[], random: () => number, always = false): Follo
   return { ...counted, chance, roll, followed: true, word: pick.next, picked: rows[i].count, pickAt, share: pick.count / kept };
 }
 
+/** follow() over both layers: the same steps, with the mixed weights (base.ts). Whole numbers for the C++ pick. */
+const SCALE = 100_000;
+export function followMixed(visitors: Row[], dataset: Row[], random: () => number, always = false): Followed {
+  const { rows, kept, keptBase, options, total } = mixed(visitors, dataset);
+  const counted = { votes: rows.reduce((sum, r) => sum + r.votes, 0), options };
+  if (total <= 0) return { ...counted, chance: 0, followed: false };
+  const chance = always ? (keptBase > 0 ? 1 : total / (total + 4 * mixing.unseen)) : kept / (kept + 3 * options);
+  const roll = chance >= 1 ? undefined : random();
+  if (roll !== undefined && roll >= chance) return { ...counted, chance, roll, followed: false };
+  const top = rows.length > MAX_WEIGHTS ? [...rows].sort((a, b) => b.weight - a.weight) : rows; // pickWeighted keeps the first MAX_WEIGHTS
+  const weights = top.map((r) => ({ next: r.next, count: Math.max(1, Math.round(r.weight * SCALE)) }));
+  const r = random();
+  const pick = pickWeighted(weights, r)!;
+  const i = weights.indexOf(pick);
+  const sum = weights.slice(0, MAX_WEIGHTS).reduce((s, w) => s + w.count, 0);
+  const before = weights.slice(0, i).reduce((s, w) => s + w.count, 0);
+  const pickAt = Math.min(Math.max((r * sum - before) / pick.count, 0), 0.999);
+  return { ...counted, chance, roll, followed: true, word: pick.next, picked: top[i].votes, pickAt, share: top[i].weight / total };
+}
+
+/**
+ * The chain's chance of each next word after (p2, p1): P(w) = chance × share(w) + (1 − chance) × the shorter context,
+ * down to the fallback. With only visitors this is the old formula: chance × share = (count − D) / total.
+ */
+export function predictor(sql: SqlStorage, p2: string, p1: string, stop: number, vocab: number) {
+  const layer = (visitors: Row[], dataset: Row[]) => {
+    const { rows, kept, options, total } = mixed(visitors, dataset);
+    const share = new Map(rows.map((r) => [r.next, r.weight / total]));
+    return { share, chance: kept > 0 ? kept / (kept + 3 * options) : 0 };
+  };
+  const tri = layer(sql.exec<Row>("SELECT next, count FROM grams WHERE p2 = ? AND p1 = ?", p2, p1).toArray(), base?.next(p2, p1) ?? []);
+  const bi = layer(sql.exec<Row>("SELECT next, count FROM pairs WHERE p1 = ?", p1).toArray(), base?.word(p1) ?? []);
+  const heard = base ? base.tokens + base.ends : 0;
+  const bottom = (w: string) => {
+    if (base && mixing.bottom === "unigram") return (w === END ? base.ends : Math.max(base.uses(w), 1)) / heard;
+    return w === END ? stop : (1 - stop) / vocab;
+  };
+  const chance = (w: string) => {
+    const below = bi.chance * (bi.share.get(w) ?? 0) + (1 - bi.chance) * bottom(w);
+    return tri.chance * (tri.share.get(w) ?? 0) + (1 - tri.chance) * below;
+  };
+  return { chance, words: () => [...new Set([END, ...tri.share.keys(), ...bi.share.keys()])] };
+}
+
 /**
  * Ohm's best guess for the word after (p2, p1), for the guessing skill: the most likely word in his model, the same
  * D = ¾ steps as follow() (brain_sim.ipynb, section 22). Babble spreads its share over every word he knows, so the
  * best guess is always a word someone typed here, or the end. Ties go to the first in alphabetical order.
  */
 function guess(sql: SqlStorage, p2: string, p1: string, stop: number, vocab: number) {
-  const tri = sql.exec<Row>("SELECT next, count FROM grams WHERE p2 = ? AND p1 = ?", p2, p1).toArray();
-  const bi = sql.exec<Row>("SELECT next, count FROM pairs WHERE p1 = ?", p1).toArray();
-  // A context's own share of w, plus what it passes down times the back-off's chance of w.
-  const mix = (rows: Row[], w: string, below: number) => {
-    if (rows.length === 0) return below;
-    const total = rows.reduce((sum, r) => sum + r.count, 0);
-    const count = rows.find((r) => r.next === w)?.count ?? 0;
-    return Math.max(count - DISCOUNT, 0) / total + ((DISCOUNT * rows.length) / total) * below;
-  };
-  const chance = (w: string) => mix(tri, w, mix(bi, w, w === END ? stop : (1 - stop) / vocab));
-  const words = [...new Set([END, ...tri.map((r) => r.next), ...bi.map((r) => r.next)])].sort();
-  return words.reduce((best, w) => (chance(w) > chance(best) ? w : best));
+  const { chance, words } = predictor(sql, p2, p1, stop, vocab);
+  let best = END;
+  let top = -1;
+  for (const w of words().sort()) {
+    const c = chance(w);
+    if (c > top) [best, top] = [w, c];
+  }
+  return best;
 }
 
 /** Any word Ohm knows. A random rowid reads 1 row, where ORDER BY random() would read the whole table. */
 function randomWord(sql: SqlStorage, random: () => number) {
+  // ponytail: with a base, babble only draws from it, so a word only visitors know is never babbled
+  if (base) {
+    for (let i = 0; i < 20; i++) {
+      const w = base.random(random());
+      if (!hidden.has(w)) return w;
+    }
+  }
   const top = sql.exec<{ top: number | null }>("SELECT MAX(rowid) AS top FROM words").one().top ?? 0;
   // ponytail: deleted (blocked) words leave gaps, so the word after a gap is picked a bit more often
   return sql
@@ -252,8 +302,10 @@ function randomWord(sql: SqlStorage, random: () => number) {
  */
 function climb(sql: SqlStorage, mind: Mind, rungs: Rungs, edge: string, random: () => number): WhyStep {
   const tried: WhyStep["tried"] = [];
-  for (const [rung, query, params] of rungs) {
-    const { word, share, picked, pickAt, ...rest } = follow(sql.exec<Row>(query, ...params).toArray(), random, rung === "word");
+  for (const [rung, query, params, dataset] of rungs) {
+    const visitors = sql.exec<Row>(query, ...params).toArray();
+    const always = rung === "word";
+    const { word, share, picked, pickAt, ...rest } = base ? followMixed(visitors, dataset(base), random, always) : follow(visitors, random, always);
     tried.push({ rung, ...rest });
     if (word) return { word, tried, share, picked, pickAt };
   }
@@ -263,7 +315,7 @@ function climb(sql: SqlStorage, mind: Mind, rungs: Rungs, edge: string, random: 
   const said = { ends: mind.ends, heard: mind.tokens + mind.ends, stopRoll };
   return { word: stopRoll < stop ? edge : randomWord(sql, random), tried, stop, ...said };
 }
-type Rungs = readonly (readonly ["pair" | "word", string, readonly string[]])[];
+type Rungs = readonly (readonly ["pair" | "word", string, readonly string[], (b: Base) => Row[]])[];
 
 /** The word after his last two, p2 and p1. */
 const nextWord = (sql: SqlStorage, mind: Mind, p2: string, p1: string, random: () => number) =>
@@ -271,8 +323,8 @@ const nextWord = (sql: SqlStorage, mind: Mind, p2: string, p1: string, random: (
     sql,
     mind,
     [
-      ["pair", `SELECT next, count FROM grams WHERE p2 = ? AND p1 = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, [p2, p1]],
-      ["word", `SELECT next, count FROM pairs WHERE p1 = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, [p1]],
+      ["pair", `SELECT next, count FROM grams WHERE p2 = ? AND p1 = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, [p2, p1], (b) => b.next(p2, p1)],
+      ["word", `SELECT next, count FROM pairs WHERE p1 = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, [p1], (b) => b.word(p1)],
     ],
     END,
     random,
@@ -284,8 +336,8 @@ const prevWord = (sql: SqlStorage, mind: Mind, a: string, b: string, random: () 
     sql,
     mind,
     [
-      ["pair", `SELECT p2 AS next, count FROM grams WHERE p1 = ? AND next = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, [a, b]],
-      ["word", `SELECT p1 AS next, count FROM pairs WHERE next = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, [a]],
+      ["pair", `SELECT p2 AS next, count FROM grams WHERE p1 = ? AND next = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, [a, b], (d) => d.prev(a, b)],
+      ["word", `SELECT p1 AS next, count FROM pairs WHERE next = ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, [a], (d) => d.before(a)],
     ],
     START,
     random,
@@ -293,18 +345,35 @@ const prevWord = (sql: SqlStorage, mind: Mind, a: string, b: string, random: () 
 
 /** How often babble stops: as often as the sentences Ohm heard ended. */
 function stopChance(mind: Mind) {
-  const heard = mind.tokens + mind.ends;
-  return heard ? mind.ends / heard : 1;
+  const heard = mind.tokens + mind.ends + (base ? base.tokens + base.ends : 0);
+  return heard ? (mind.ends + (base?.ends ?? 0)) / heard : 1;
+}
+
+/** The rarest word he knows of a message, counting both layers. Ties go to the first in alphabetical order. */
+function rarest(sql: SqlStorage, b: Base, heard: string[], marks: string) {
+  const uses = new Map(sql.exec<{ word: string; uses: number }>(`SELECT word, uses FROM words WHERE word IN (${marks})`, ...heard).toArray().map((r) => [r.word, r.uses]));
+  const known = [...new Set(heard)].filter((w) => (uses.has(w) || b.has(w)) && !hidden.has(w)).sort();
+  const count = (w: string) => (uses.get(w) ?? 0) + b.uses(w);
+  return known.length ? known.reduce((best, w) => (count(w) < count(best) ? w : best)) : undefined;
+}
+
+/** A lesson: visitors have said the same word after the topic at least `least` times. His lines can't know it, so the chain speaks then. */
+function taught(sql: SqlStorage, heard: string[], least: number) {
+  if (least === Infinity || heard.length === 0) return undefined;
+  const marks = heard.map(() => "?").join(",");
+  const word = base ? rarest(sql, base, heard, marks) : sql.exec<{ word: string }>(`SELECT word FROM words WHERE word IN (${marks}) ORDER BY uses LIMIT 1`, ...heard).toArray()[0]?.word;
+  return word !== undefined && (sql.exec<{ n: number | null }>("SELECT MAX(count) AS n FROM pairs WHERE p1 = ?", word).one().n ?? 0) >= least ? word : undefined;
 }
 
 /** Where Ohm starts when he has no answer for you: your topic, his situation, or a random word. */
 function startWord(sql: SqlStorage, heard: string[], on: Situation[], random: () => number): Why["seed"] {
   // The topic: the rarest word Ohm knows in the message ("kopi", not "aku").
   const marks = heard.map(() => "?").join(",");
-  const topic = heard.length
-    ? sql.exec<{ word: string }>(`SELECT word FROM words WHERE word IN (${marks}) ORDER BY uses LIMIT 1`, ...heard).toArray()[0]
-        ?.word
-    : undefined;
+  const topic = !heard.length
+    ? undefined
+    : base
+      ? rarest(sql, base, heard, marks)
+      : sql.exec<{ word: string }>(`SELECT word FROM words WHERE word IN (${marks}) ORDER BY uses LIMIT 1`, ...heard).toArray()[0]?.word;
   // Or, sometimes, what's on his mind: the word most clearly tied to his situation right now.
   const felt = situationWord(sql, on);
   const roll = felt && topic ? random() : undefined; // with only one of them, there's nothing to choose
@@ -326,7 +395,8 @@ function startWord(sql: SqlStorage, heard: string[], on: Situation[], random: ()
  */
 
 export function reply(sql: SqlStorage, heard: string[], on: Situation[], random: () => number = dice) {
-  if (!exists(sql, "SELECT 1 FROM words LIMIT 1")) return null;
+  if (!base && !exists(sql, "SELECT 1 FROM words LIMIT 1")) return null;
+  if (base || retriever) loadHidden(sql);
   const mind = loadMind(sql);
   const link = answerTo(sql, heard);
   const questions = Object.entries(mind.questions).map(([next, count]) => ({ next, count }));
@@ -343,6 +413,21 @@ export function reply(sql: SqlStorage, heard: string[], on: Situation[], random:
     const words = quote.text.split(" ");
     for (const w of new Set(words)) sql.exec("UPDATE words SET said = said + 1 WHERE word = ?", w);
     return { text: quote.text, words, why: { on, seed, steps: [], quote: { words, times: quote.n } } satisfies Why };
+  }
+  // His own lines (retrieve.ts), where they're on: the reply to the closest message he has a line for, else he admits he doesn't know.
+  const own = retriever?.own?.(heard, random);
+  const lesson = retriever ? taught(sql, tidy(heard), retriever.lesson) : undefined;
+  // His own line wins, unless a lesson is about a word that line doesn't mention.
+  const found = own && (!lesson || own.prompt.includes(lesson)) ? own : lesson ? undefined : retriever?.find(heard, random);
+  if (retriever && (!found || found.confidence < retriever.minConfidence || heard.length < retriever.minWords)) {
+    if (retriever.only) return null;
+  } else if (found) {
+    const { words } = found;
+    return {
+      text: words.join(" "),
+      words,
+      why: { on, seed: { word: words[0], from: "retrieved" }, steps: [], quote: { words, times: 1 }, retrieved: found } satisfies Why,
+    };
   }
   // 5 tries from the same start, and he says the one whose word pairs most people typed (19d). Answers and asking
   // back make one try and don't grow left: they start with their word on purpose, and brain_sim.ipynb (19c, 19d)
@@ -397,7 +482,7 @@ function crowd(sql: SqlStorage, words: string[], known: Map<string, number>) {
   return words.slice(1).map((w, i) => {
     const pair = `${words[i]} ${w}`;
     if (!known.has(pair))
-      known.set(pair, sql.exec<{ count: number }>("SELECT count FROM pairs WHERE p1 = ? AND next = ?", words[i], w).toArray()[0]?.count ?? 0);
+      known.set(pair, Math.max(sql.exec<{ count: number }>("SELECT count FROM pairs WHERE p1 = ? AND next = ?", words[i], w).toArray()[0]?.count ?? 0, base?.pair(words[i], w) ?? 0));
     return known.get(pair)! >= 2;
   });
 }

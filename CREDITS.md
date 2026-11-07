@@ -1,0 +1,14 @@
+# Credits
+
+## Tatoeba
+
+The word counts in `src/base.bin` are derived from Indonesian sentences on [Tatoeba](https://tatoeba.org), used under [CC BY 2.0 FR](https://creativecommons.org/licenses/by/2.0/fr/).
+Changes made: the sentences were split into word patterns and counted. No sentence is stored whole. Sentences with blocked words, and the stock names Tom and Mary, were left out.
+
+Sentences by 191 contributors, from Tatoeba's export of 2026-11-05, with authors from its export of 2026-11-07:
+
+aandrusiak, aauliahakim, ABChessel, abiniz, aboubasha, Adelpa, Adou_Fr, agro1986, ajid, AjieB, al_ex_an_der, alekso, amangimam, Amastan, andreesurya, anod, Anothen, Archangelix, arminhs, Arnoldus, arozian, asambul, Askara, aurelie, azmanayob, azraelgnosis, bagustris, Balamax, banditelol, Batozar, bbegrizzly, bcmoney, Bilmanda, boracasli2, bpranoto, Bukhori, by_you, cadininbiri, capcus, cassle, cbrdarksite, ccxex29, Chenweijun, ciscas, Daniellekartika, dbahasa, deel, demoanokkelate, deyta, diegohn, diosundoro, dividebyd, dodonko, dr_Dwi_N, DrKeek, dschaena, Dusun_Les, eltohaga, enebi, Enreina, estimator, everylanguage, evkon, exodream, fadhil_riyanto, felisgala, ffooll, fira242, Freddy_hutauruk, frogprincess, futureboy, fuwafuwa, golfrid_rhs, HAGNi, hank, hasnadinar, hayabusa_future, henrywijaya001, holger_reinherzen, IDha, idulcandra, Ivanovb, Iye_Tete, janTuki, japanet, jared1981, Jepang, jessie0422, jizzomaru, Joseagush, Josephlingo, joses, JuanIshlah, jupli, justhalf, JWeighardt, kaaay, kelemta, Khanif46, khurios2000, kiraio, kistijantoro, koala, koreanvitamin, Krisna68, KuroMage, Laudabant, le_petit_ane_gris, LeeSooHa, lewis, Lukman, luridarmawan, marloncori, mashiro10, mayok, medduki, megamanenm, menyo, mhardiyanto1, mimosawang, morgyn, mraz, nasirusman, ngimoel, ninefi, noniq, nonong, Normanshah, nxvjjang, orion17, Pacific, PERCE_NEIGE, Pi31415i, polyhecksglot, pryo, purichan, qazz0003, qsanta, qsanta69, ralseifluff, RandomIDN, rdgscratch, reitnorf, Renzonokuken, rezadhiaulhaq, Ricardo14, rizkiatikah24, rizkisaid, rizkym389, robycigar, Roddern, rtnF, ryenap, SadeceTurkce, saritaps, Seael, seirara, serpico, Shiomizukidesu, sinar, Sna, SnipsyStripes, starplane, svhschinese, synclear, Tamajeq1286, Tanama, TanoshiiJP, Tempoacc, Theodoor, timgreig, Tsutrisn, tulin, turklehceleri, Ultronimation, umarsaid, User113124, User65345, ver50n, Versuss, VirtuOZ, vortexiuuu, warikdigital, willwesley, windra, Winterfall_0, xiongmao, xmono22, yatyayat, zackrivaldhi, zarko
+
+## Word lists
+
+`wordlists/id.txt` and `wordlists/en.txt` come from [FrequencyWords](https://github.com/hermitdave/FrequencyWords) by Hermit Dave. Its code is MIT, but its word lists are CC BY-SA 4.0, so the comment in `tools/build_wordlists.py` that says MIT needs fixing. The blocklist uses [LDNOOBW](https://github.com/LDNOOBW/List-of-Dirty-Naughty-Obscene-and-Otherwise-Bad-Words), CC BY 4.0.
