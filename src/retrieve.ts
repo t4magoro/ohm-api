@@ -3,7 +3,9 @@
 // what you said it covers. When none fits, he says he doesn't know yet and asks to be taught.
 import { hidden } from "./base";
 
-export type Found = { words: string[]; prompt: string[]; score: number; confidence: number; own?: boolean; admit?: boolean };
+/** The sum behind `confidence`: each shared word's weight (BM25's idf), and the weight and count of the rest of what you said. */
+export type Weights = { shared: [string, number][]; rest: number; others: number };
+export type Found = { words: string[]; prompt: string[]; score: number; confidence: number; weights?: Weights; own?: boolean; admit?: boolean; matched?: string[]; below?: boolean };
 export type Retriever = { find(heard: string[], random: () => number, accept?: (prompt: string[]) => boolean): Found | undefined; minConfidence: number; minWords: number; only: boolean; lesson: number; bytes: number; own?(heard: string[], random: () => number): Found | undefined };
 
 const K1 = 1.2; // BM25's usual values, not tuned
@@ -123,14 +125,17 @@ export function openRetriever(buffer: ArrayBuffer, { minConfidence = 0, minWords
       const d = open[Math.floor(random() * open.length)];
       const stored = say(starts[d], starts[d] + lengths[d]);
       const prompt = new Set(stored);
-      let matched = 0;
+      const shared: [string, number][] = [];
       for (const w of query) {
         if (prompt.has(w)) {
           const i = words.get(w)!;
-          matched += idf(offsets[i + 1] - offsets[i]);
+          shared.push([w, idf(offsets[i + 1] - offsets[i])]);
         }
       }
-      return { words: say(starts[d] + lengths[d], starts[d + 1]), prompt: stored, score: bestScore, confidence: matched / all };
+      const matched = shared.reduce((sum, [, x]) => sum + x, 0);
+      const round = (x: number) => Math.round(x * 100) / 100;
+      const weights = { shared: shared.map(([w, x]) => [w, round(x)] as [string, number]), rest: round(all - matched), others: query.length - shared.length };
+      return { words: say(starts[d] + lengths[d], starts[d + 1]), prompt: stored, score: bestScore, confidence: matched / all, weights };
     },
   };
 }
@@ -172,7 +177,10 @@ export function linesFirst(lines: Retriever, rest: Retriever, least = 0.5, dice?
         return prompt.filter((w) => said.has(w)).length / prompt.length > least;
       };
       const found = lines.find(asked, dice ? dice(heard) : random, fits);
-      return found && found.confidence >= least ? { ...found, own: true } : undefined;
+      if (!found) return undefined;
+      const matched = found.prompt.filter((w) => said.has(w)); // his words you also said, for the think page
+      // Under the bar it isn't his answer, but the think page shows it as the line that came closest.
+      return found.confidence >= least ? { ...found, own: true, matched } : { ...found, below: true, matched };
     },
     find: (heard, random) => (heard.length >= rest.minWords ? rest.find(heard, random) : undefined),
   };
