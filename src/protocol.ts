@@ -80,8 +80,25 @@ export type WhyStep = {
  * word and your topic, his die for the situation (yes when it's below SITUATION_CHANCE).
  */
 export type Why = {
-  /** The message his line answers, and how well it matched; `admit` when no line fit and he said he doesn't know yet. */
-  retrieved?: { prompt: string[]; score: number; confidence: number; own?: boolean; admit?: boolean };
+  /**
+   * When he said one of his own lines (`own`): the message it answers, its BM25 score, `confidence` (how much of what you
+   * said it covers, rare words counting more), and `matched` (its words you also said). `weights`: the sum behind
+   * `confidence` = shared ÷ (shared + rest), with each shared word's weight, the rest's total and how many other words
+   * you said (never which). When no line fit and he said he doesn't know yet (`admit`): `closest` is the line that came
+   * nearest, if any passed the other checks.
+   */
+  retrieved?: {
+    prompt: string[];
+    score: number;
+    confidence: number;
+    weights?: { shared: [string, number][]; rest: number; others: number };
+    own?: boolean;
+    admit?: boolean;
+    matched?: string[];
+    closest?: { prompt: string[]; confidence: number; matched: string[]; weights: { shared: [string, number][]; rest: number; others: number } };
+  };
+  /** A lesson: `count` visitors said the same word after `word`. On a chain reply it's why he didn't say a line (`line`: the line it beat); on a line it lost to the line. */
+  lesson?: { word: string; count: number; line?: string[] };
   on: Situation[];
   seed: {
     word: string;

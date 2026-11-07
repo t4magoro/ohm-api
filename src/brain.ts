@@ -357,12 +357,16 @@ function rarest(sql: SqlStorage, b: Base, heard: string[], marks: string) {
   return known.length ? known.reduce((best, w) => (count(w) < count(best) ? w : best)) : undefined;
 }
 
-/** A lesson: visitors have said the same word after the topic at least `least` times. His lines can't know it, so the chain speaks then. */
+/**
+ * A lesson: visitors have said the same word after the topic at least `least` times (`count`, with the visitor rule).
+ * His lines can't know it, so the chain speaks then.
+ */
 function taught(sql: SqlStorage, heard: string[], least: number) {
   if (least === Infinity || heard.length === 0) return undefined;
   const marks = heard.map(() => "?").join(",");
   const word = base ? rarest(sql, base, heard, marks) : sql.exec<{ word: string }>(`SELECT word FROM words WHERE word IN (${marks}) ORDER BY uses LIMIT 1`, ...heard).toArray()[0]?.word;
-  return word !== undefined && (sql.exec<{ n: number | null }>("SELECT MAX(count) AS n FROM pairs WHERE p1 = ?", word).one().n ?? 0) >= least ? word : undefined;
+  const count = word === undefined ? 0 : (sql.exec<{ n: number | null }>("SELECT MAX(count) AS n FROM pairs WHERE p1 = ?", word).one().n ?? 0);
+  return count >= least ? { word: word!, count } : undefined;
 }
 
 /** Where Ohm starts when he has no answer for you: your topic, his situation, or a random word. */
@@ -415,18 +419,20 @@ export function reply(sql: SqlStorage, heard: string[], on: Situation[], random:
     return { text: quote.text, words, why: { on, seed, steps: [], quote: { words, times: quote.n } } satisfies Why };
   }
   // His own lines (retrieve.ts), where they're on: the reply to the closest message he has a line for, else he admits he doesn't know.
-  const own = retriever?.own?.(heard, random);
+  const tried = retriever?.own?.(heard, random);
+  const own = tried?.own ? tried : undefined;
   const lesson = retriever ? taught(sql, tidy(heard), retriever.lesson) : undefined;
   // His own line wins, unless a lesson is about a word that line doesn't mention.
-  const found = own && (!lesson || own.prompt.includes(lesson)) ? own : lesson ? undefined : retriever?.find(heard, random);
+  const found = own && (!lesson || own.prompt.includes(lesson.word)) ? own : lesson ? undefined : retriever?.find(heard, random);
   if (retriever && (!found || found.confidence < retriever.minConfidence || heard.length < retriever.minWords)) {
     if (retriever.only) return null;
   } else if (found) {
     const { words } = found;
+    const closest = found.admit && tried?.below ? { prompt: tried.prompt, confidence: tried.confidence, matched: tried.matched!, weights: tried.weights! } : undefined;
     return {
       text: words.join(" "),
       words,
-      why: { on, seed: { word: words[0], from: "retrieved" }, steps: [], quote: { words, times: 1 }, retrieved: found } satisfies Why,
+      why: { on, seed: { word: words[0], from: "retrieved" }, steps: [], quote: { words, times: 1 }, retrieved: closest ? { ...found, closest } : found, ...(lesson ? { lesson } : {}) } satisfies Why,
     };
   }
   // 5 tries from the same start, and he says the one whose word pairs most people typed (19d). Answers and asking
@@ -441,6 +447,7 @@ export function reply(sql: SqlStorage, heard: string[], on: Situation[], random:
   for (const w of new Set(words)) sql.exec("UPDATE words SET said = said + 1 WHERE word = ?", w);
   const babbleOnly = [...steps, ...back].every((s) => s.stop !== undefined);
   const why: Why = { on, seed, steps };
+  if (lesson) why.lesson = { ...lesson, ...(tried?.own ? { line: tried.prompt } : {}) }; // a lesson is why the chain spoke
   if (back.length > 0) why.back = back;
   if (more) {
     why.tries = scored.map((t) => ({ words: t.words, crowd: t.crowd }));
