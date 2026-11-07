@@ -50,6 +50,19 @@ describe("his own lines", () => {
 
   it("matches an introduction whatever the name", () => {
     expect(own("nama aku iqbal")).toBe("senang kenalan");
+    const intro = ohm.own!(["nama", "aku", "iqbal"], () => 0)!;
+    expect(intro.matched).toEqual(["nama", "aku"]);
+    // The sum the think page prints: shared weights ÷ (shared + the rest of what you said).
+    const shared = intro.weights!.shared.reduce((sum, [, x]) => sum + x, 0);
+    expect(intro.weights!.shared.map(([w]) => w)).toEqual(["nama", "aku"]);
+    expect(intro.weights!.others).toBe(0);
+    expect(shared / (shared + intro.weights!.rest)).toBeCloseTo(intro.confidence, 2);
+  });
+
+  it("keeps the line that came closest, below the bar, without saying it", () => {
+    const near = ohm.own!(["kopi", "atau", "teh", "susu", "jahe", "kelapa"], () => 0);
+    expect(near).toMatchObject({ below: true, matched: ["kopi", "atau", "teh"] });
+    expect(near?.own).toBeUndefined();
   });
 
   it("admits he doesn't know when no line fits", () => {
@@ -76,6 +89,8 @@ describe("lessons and lines", () => {
     useRetriever(ohm);
     teach(sql, 1);
     expect(reply(sql, ["kopi"], [], () => 0.5)?.why.retrieved?.admit).toBe(true);
+    const admitted = reply(sql, ["kopi", "atau", "teh", "susu", "jahe", "kelapa"], [], () => 0.5)!;
+    expect(admitted.why.retrieved).toMatchObject({ admit: true, closest: { prompt: ["kopi", "atau", "teh"] } });
   });
 
   it("lets a lesson speak once 3 people taught it, unless his line mentions that word", () => {
@@ -85,6 +100,7 @@ describe("lessons and lines", () => {
     const taught = reply(sql, ["kopi"], [], () => 0.5)!;
     expect(taught.why.seed.from).not.toBe("retrieved");
     expect(taught.words).toContain("enak");
+    expect(taught.why.lesson).toEqual({ word: "kopi", count: 3 });
     expect(reply(sql, ["kopi", "atau", "teh"], [], () => 0.5)?.why.retrieved?.own).toBe(true);
   });
 });
