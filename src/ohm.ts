@@ -1,4 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
+import baseFile from "./base.bin";
+import linesFile from "./lines.bin";
+import { loadBase, useBase } from "./base";
+import { ADMIT, admitting, linesFirst, openRetriever, useRetriever } from "./retrieve";
 import { parseAdminCommand } from "./admin";
 import { ANSWER_MS } from "./answers";
 import { brainStats, hear, inStyle, reply } from "./brain";
@@ -59,6 +63,11 @@ type Visitor = {
   lastCare?: { t: Care; at: number };
   toYou?: { words: string[]; at: number };
 };
+
+// What he knows before anyone talks: Tatoeba's word counts (base.ts), and his own lines, with admitting he doesn't know
+// when none fits (retrieve.ts). Both are read-only files, loaded once per wake. Visitors only ever write to SQLite.
+useBase(loadBase(baseFile));
+useRetriever(linesFirst(openRetriever(linesFile, { minWords: 1 }), admitting(ADMIT)));
 
 // The one and only Ohm. Every visitor connects to this single object, and it handles
 // one message at a time, so there is never more than one copy of Ohm's state.

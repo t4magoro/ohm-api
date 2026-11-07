@@ -2,6 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ohm-api",
   "main": "src/index.ts",
+  "rules": [{ "type": "Data", "globs": ["**/*.bin"], "fallthrough": true }],
   "compatibility_date": "2026-09-01",
   // Recompile the C++ before every dev start and deploy, and whenever a file in cpp/ changes.
   "build": { "command": "npm run build:wasm", "watch_dir": "cpp" },

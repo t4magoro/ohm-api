@@ -80,10 +80,12 @@ export type WhyStep = {
  * word and your topic, his die for the situation (yes when it's below SITUATION_CHANCE).
  */
 export type Why = {
+  /** The message his line answers, and how well it matched; `admit` when no line fit and he said he doesn't know yet. */
+  retrieved?: { prompt: string[]; score: number; confidence: number; own?: boolean; admit?: boolean };
   on: Situation[];
   seed: {
     word: string;
-    from: "topic" | "situation" | "random" | "answer" | "ask";
+    from: "topic" | "situation" | "random" | "answer" | "ask" | "retrieved";
     situation?: Situation;
     lift?: number;
     cue?: string;

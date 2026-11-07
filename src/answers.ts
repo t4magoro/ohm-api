@@ -5,6 +5,7 @@
 // different browsers. When your message has a cue, Ohm answers from it. Tested in brain_sim.ipynb, section 18:
 // in a month he went from answering 11% of common questions to 60% (35% in a quiet crowd), and 88% of his links
 // were real answers.
+import { base } from "./base";
 import { g2 } from "./grounding";
 import { bump, type Mind } from "./mind";
 
@@ -34,6 +35,8 @@ export function learnAnswer(sql: SqlStorage, mind: Mind, line: string[], words: 
       .toArray()
       .map((r) => [r.word, r.uses]),
   );
+  // Words only the base knows are known too, or Ohm's own line would have no cues.
+  if (base) for (const w of all) if (base.has(w)) uses.set(w, (uses.get(w) ?? 0) + base.uses(w));
   // The rarest known words, or word pairs (a pair's uses are its two words' uses added up).
   const known = (s: string) => s.split(" ").every((w) => uses.has(w));
   const usesOf = (s: string) => s.split(" ").reduce((n, w) => n + uses.get(w)!, 0);
