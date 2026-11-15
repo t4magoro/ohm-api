@@ -102,7 +102,7 @@ export type Why = {
   on: Situation[];
   seed: {
     word: string;
-    from: "topic" | "situation" | "random" | "answer" | "ask" | "retrieved";
+    from: "topic" | "situation" | "random" | "answer" | "ask" | "retrieved" | "written";
     situation?: Situation;
     lift?: number;
     cue?: string;
@@ -123,6 +123,27 @@ export type Why = {
   tries?: { words: string[]; crowd: boolean[] }[];
   chosen?: number;
   quote?: { words: string[]; times: number };
+  /**
+   * Brain v4 (talk.ts): he wrote the reply word by word. Every candidate he wrote, its score (mean log2 p per word,
+   * -Infinity, sent as null, for a banned copy or one past 20 words) and why it was kept or dropped; he said the one at
+   * `chosen`, if its score reached the guard's `theta`, else an admitting line (`admit`). `lambda`: how much the lesson
+   * weighed (0 without one). `read`: the message's words as he read them (at most 20). `steps`: for each word of the
+   * chosen one, its probability, the top 5 it was picked from, the share of its probability that came from a lesson, and
+   * `attn`, his attention on each word of `read` when he picked it (averaged over every layer and head; the rest went to
+   * his state, the earlier line and his own words). `die`: where his roll landed on the chances laid end to end from
+   * the likeliest, and `cut`: where they stop (the top 95%). An admitting line keeps the chosen candidate's steps.
+   */
+  written?: {
+    score: number;
+    theta: number;
+    lambda: number;
+    chosen: number;
+    admit: boolean;
+    state: string[]; // what he knew of himself: battery, mood, weather, part of the day (situation.ts, stateTokens)
+    read: string[]; // only to the visitor he answered (forOthers, brain.ts); everyone else gets []
+    steps: { word: string; p: number; top: [string, number][]; lesson: number; attn?: number[]; die: number; cut: number }[]; // attn: only to that visitor
+    candidates: { words: string[] | null; score: number; why: "ok" | "copy" | "too long" }[];
+  };
 };
 /** Something Ohm said, in reply to a visitor. Visitors' own messages are never shown to others. */
 export type Line = { id: number; at: number; text: string; to: string };

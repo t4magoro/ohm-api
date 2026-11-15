@@ -39,7 +39,8 @@ beforeEach(() => {
 
 describe("word moderation", () => {
   it("approving a queued word teaches it to Ohm", () => {
-    hear(sql, lexicon, ["wkwk"], RINA, T0, DRY);
+    // Nothing new joins the queue now (hear learns every word that isn't blocked), but words queued before can be approved.
+    sql.exec("INSERT INTO pending (word, seen, first_seen) VALUES ('wkwk', 1, ?)", T0);
     approveWord(sql, "wkwk", "id", T0);
     expect(count(sql, "SELECT COUNT(*) AS n FROM pending")).toBe(0);
     expect(sql.exec("SELECT langs, by_name FROM words WHERE word = 'wkwk'").one()).toEqual({ langs: "id", by_name: "admin" });
@@ -60,8 +61,9 @@ describe("word moderation", () => {
   it("the overview lists what needs your attention", () => {
     hear(sql, lexicon, ["aku", "wkwk"], RINA, T0, DRY);
     const o = overview(sql, DEFAULT_SETTINGS);
-    expect(o.pending).toEqual([{ word: "wkwk", seen: 1 }]);
-    expect(o.words).toEqual([{ word: "aku", by: "Rina", ipHash: "0123456789abcdef", at: T0 }]);
+    expect(o.pending).toEqual([]); // he learned "wkwk" straight away
+    expect(o.words).toContainEqual({ word: "aku", by: "Rina", ipHash: "0123456789abcdef", at: T0 });
+    expect(o.words.map((w) => w.word).sort()).toEqual(["aku", "wkwk"]);
     expect(o.settings).toEqual(DEFAULT_SETTINGS);
   });
   
@@ -79,8 +81,8 @@ describe("word moderation", () => {
     hear(sql, lexicon, ["aku", "suka", "wkwk"], RINA, T0, DRY);
     blockWord(sql, "kopi");
     const found = search(sql, "k");
-    expect(found.words.map((w) => w.word)).toEqual(["aku", "suka"]);
-    expect(found.pending).toEqual([{ word: "wkwk", seen: 1 }]);
+    expect(found.words.map((w) => w.word)).toEqual(["aku", "suka", "wkwk"]);
+    expect(found.pending).toEqual([]);
     expect(found.blocked).toEqual([{ word: "kopi" }]);
     expect(search(sql, "%").words).toEqual([]);
     expect(search(sql, "_").words).toEqual([]);

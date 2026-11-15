@@ -10,7 +10,8 @@ import { kvGet } from "./kv";
 import { bump, loadMind, saveMind, type Mind } from "./mind";
 import { DISCOUNT, SITUATION_CHANCE, type Brain, type Why, type WhyStep } from "./protocol";
 import type { Situation } from "./situation";
-import { retriever, tidy } from "./retrieve";
+import { ADMIT, admitting, retriever, tidy } from "./retrieve";
+import { LESSON, model, SETTINGS, speak, type Talk } from "./talk";
 import { math } from "./wasm";
 import { hasBlocked, squash, type Lexicon } from "./words";
 
@@ -35,9 +36,9 @@ const dice = () => crypto.getRandomValues(new Uint32Array(1))[0] / 2 ** 32;
  * Ohm hears a message, as typed. Every word is stored in one spelling ("gak" → "tidak"), and how it was spelled
  * is counted, so Ohm can talk like the people he hears (inStyle). First it's a test: before learning anything,
  * the skills record how much of it he could have predicted. If Ohm just talked to this visitor (`line`), the
- * message is also an answer to him (answers.ts). Then he learns: allowed new words join his vocabulary, unknown
- * words wait in the queue for your approval, word triples and word + situation sightings are counted. One
- * blocked word rejects everything. The visitor rule: a count only goes up when a different visitor than last
+ * message is also an answer to him (answers.ts). Then he learns: every new word joins his vocabulary, whether or not
+ * it's in his word lists (the owner's call, 2026-11-15: no approval queue), and word triples and word + situation
+ * sightings are counted. One blocked word rejects everything, so a blocked word is never learned. The visitor rule: a count only goes up when a different visitor than last
  * time typed it. Patterns count visitors by IP hash, so one person (or one Wi-Fi) repeating a sentence can't make
  * it count more. Situation sightings and answers count browsers, so friends on one Wi-Fi can each teach Ohm what
  * a word goes with, and what to answer. And a word is sighted at most once per clock hour: messages in one hour
@@ -105,7 +106,7 @@ export function hear(
       } else {
         sql.exec("UPDATE words SET uses = uses + 1 WHERE word = ?", w);
       }
-    } else if (lexicon.langsOf(w).length > 0) {
+    } else {
       sql.exec(
         `INSERT INTO words (word, langs, by_id, by_name, ip_hash, at, uses, seen, seen_by, last_hour)
          VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?, ?)`,
@@ -121,14 +122,6 @@ export function hear(
       learned.push(w);
       sighted.push(w);
       lastBy.set(w, browser);
-    } else {
-      sql.exec(
-        "INSERT INTO pending (word, seen, first_seen) VALUES (?, 1, ?) ON CONFLICT (word) DO UPDATE SET seen = seen + 1",
-        w,
-        now,
-      );
-      pieces.push([]); // never link two words across one Ohm doesn't know
-      continue;
     }
     pieces.at(-1)!.push(w);
   }
@@ -369,6 +362,16 @@ function taught(sql: SqlStorage, heard: string[], least: number) {
   return count >= least ? { word: word!, count } : undefined;
 }
 
+/**
+ * Brain v4's lesson layer (talk.ts): what visitors said after his last two words (grams), else after the last one (pairs),
+ * counting only patterns with a count of LESSON or more, as the chain climbs (nextWord). "<end>" for a sentence end.
+ */
+function taughtAfter(sql: SqlStorage, p2: string, p1: string): [string, number][] {
+  const read = (query: string, ...params: (string | number)[]) => sql.exec<Row>(`${query} AND count >= ? ORDER BY count DESC LIMIT ${MAX_WEIGHTS}`, ...params, LESSON).toArray();
+  const two = read("SELECT next, count FROM grams WHERE p2 = ? AND p1 = ?", p2, p1);
+  return (two.length ? two : read("SELECT next, count FROM pairs WHERE p1 = ?", p1)).map((r) => [r.next === END ? "<end>" : r.next, r.count]);
+}
+
 /** Where Ohm starts when he has no answer for you: your topic, his situation, or a random word. */
 function startWord(sql: SqlStorage, heard: string[], on: Situation[], random: () => number): Why["seed"] {
   // The topic: the rarest word Ohm knows in the message ("kopi", not "aku").
@@ -398,9 +401,9 @@ function startWord(sql: SqlStorage, heard: string[], on: Situation[], random: ()
  * lift from them, so the sums add up.
  */
 
-export function reply(sql: SqlStorage, heard: string[], on: Situation[], random: () => number = dice) {
+export function reply(sql: SqlStorage, heard: string[], on: Situation[], random: () => number = dice, talk?: Talk) {
   if (!base && !exists(sql, "SELECT 1 FROM words LIMIT 1")) return null;
-  if (base || retriever) loadHidden(sql);
+  if (base || retriever || model) loadHidden(sql);
   const mind = loadMind(sql);
   const link = answerTo(sql, heard);
   const questions = Object.entries(mind.questions).map(([next, count]) => ({ next, count }));
@@ -417,6 +420,21 @@ export function reply(sql: SqlStorage, heard: string[], on: Situation[], random:
     const words = quote.text.split(" ");
     for (const w of new Set(words)) sql.exec("UPDATE words SET said = said + 1 WHERE word = ?", w);
     return { text: quote.text, words, why: { on, seed, steps: [], quote: { words, times: quote.n } } satisfies Why };
+  }
+  // Brain v4 (talk.ts): the crisis reply stays fixed, then G writes the reply word by word, mixing in a lesson when today's
+  // rule fires. When the guard fails, he says he doesn't know yet.
+  if (model && talk) {
+    const safe = model.crisis.own!(heard, random);
+    if (safe?.own) return { text: safe.words.join(" "), words: safe.words, why: { on, seed: { word: safe.words[0], from: "retrieved" }, steps: [], quote: { words: safe.words, times: 1 }, retrieved: safe } satisfies Why };
+    const lesson = taught(sql, tidy(heard), LESSON);
+    const r = speak(model, talk, heard, lesson, (p2, p1) => taughtAfter(sql, p2, p1), random);
+    const admit = r.words ? undefined : admitting(ADMIT).find(heard, random);
+    const words = r.words ?? admit?.words;
+    if (!words) return null;
+    if (r.words) for (const w of new Set(words)) sql.exec("UPDATE words SET said = said + 1 WHERE word = ?", w);
+    const written = { score: r.score, theta: SETTINGS.theta, lambda: r.lambda, chosen: r.chosen, admit: !r.words, state: talk.state, read: r.read, steps: r.candidates[r.chosen].steps,
+                      candidates: r.candidates.map(({ words, score, why }) => ({ words, score, why })) };
+    return { text: words.join(" "), words, why: { on, seed: { word: words[0], from: "written" }, steps: [], written, ...(lesson ? { lesson } : {}) } satisfies Why };
   }
   // His own lines (retrieve.ts), where they're on: the reply to the closest message he has a line for, else he admits he doesn't know.
   const tried = retriever?.own?.(heard, random);
@@ -501,6 +519,15 @@ function beats(t: { crowd: boolean[]; words: string[] }, b: typeof t) {
   return diff > 0 || (diff === 0 && t.words.length > b.words.length);
 }
 
+/**
+ * `why` for everyone but the visitor Ohm answered: a written reply's `read` (their message) and each step's `attn` (his
+ * attention on it) are left out, so nobody else sees what they typed. Everything else names only Ohm's own words.
+ */
+export function forOthers(why: Why): Why {
+  const w = why.written;
+  return w ? { ...why, written: { ...w, read: [], steps: w.steps.map(({ attn: _, ...s }) => s) } } : why;
+}
+
 /** A reply in the spellings most people use with Ohm: "gak" if most write "gak", "tidak" if most write "tidak". */
 export function inStyle<T extends { text: string; why: Why }>(sql: SqlStorage, lexicon: Lexicon, said: T): T {
   const { spellings } = loadMind(sql);
@@ -515,6 +542,9 @@ export function inStyle<T extends { text: string; why: Why }>(sql: SqlStorage, l
   if (said.why.back) why.back = said.why.back.map((s) => ({ ...s, word: say(s.word) }));
   if (said.why.tries) why.tries = said.why.tries.map((t) => ({ ...t, words: t.words.map(say) }));
   if (quote) why.quote = { ...quote, words: quote.words.map(say) };
+  const w = said.why.written; // the think page shows the same spellings as the reply
+  if (w) why.written = { ...w, read: w.read.map(say), steps: w.steps.map((s) => ({ ...s, word: say(s.word), top: s.top.map(([x, p]): [string, number] => [say(x), p]) })),
+                         candidates: w.candidates.map((c) => ({ ...c, words: c.words && c.words.map(say) })) };
   return { ...said, text: sayAll(said.text), why };
 }
 

@@ -11,6 +11,7 @@ Visitors charge it, play with it, reboot it, and teach it to talk.
 |---|---|
 | Server | TypeScript Cloudflare Worker + one Durable Object `Ohm` (SQLite, WebSocket hibernation, alarms) |
 | Pet math | C++ compiled to WebAssembly (`cpp/pet.cpp`, no heap, fixed static buffer) |
+| Replies | Brain v4: a 4-layer transformer (`src/model.bin`, about 4.1M weights) run word by word in TypeScript (`src/gen.ts`), its matrix-vector products in WebAssembly SIMD (`cpp/kern.cpp`) |
 | Word lists | `tools/build_wordlists.py` → `wordlists/` (FrequencyWords top 30k id + en, LDNOOBW blocklist + `block-id.txt`) |
 | Tests | Vitest against real SQLite (`node:sqlite`) and the real `pet.wasm`; native C++ asserts with sanitizers |
 
@@ -27,6 +28,8 @@ Everything runs in Docker. You don't need Node on the host.
 | Rebuild word lists | `docker run --rm -v "${PWD}:/app" -w /app python:3.13-alpine python tools/build_wordlists.py` |
 | Rebuild his lines, after editing `lines/ohm.json` | `docker run --rm -v "${PWD}:/app" -w /app node:24-slim node --import ./tools/resolve.mjs tools/build_lines.ts` |
 | Rebuild the Tatoeba counts | See the top of `tools/build_counts.ts` |
+| Rebuild the WebAssembly (`pet.wasm`, `kern.wasm`) | `docker compose exec api npm run build:wasm` (the tests run it too) |
+| Ship a new reply model | Train and export it as in `ohm-app/research/brain_v4.ipynb` (`export.py`), then replace `src/model.bin` and `src/model.json` |
 
 For local secrets, copy them into `.dev.vars` (gitignored): `ADMIN_TOKEN`, `IP_SALT`, `FAKE_WEATHER`.
 
@@ -34,15 +37,48 @@ For local secrets, copy them into `.dev.vars` (gitignored): `ADMIN_TOKEN`, `IP_S
 
 ## How Ohm learns to talk
 
-Ohm has no AI model. It **counts which word follows which** in what visitors type, and **which words people
-use in which situation** (rain, night, charging…). To talk, it repeatedly picks a likely next word. It can only
-say words it has learned. There are **no levels**: Ohm babbles where it has no evidence and speaks in sentences
-where it has, from the very first message. Every rule below was tested before it was built, in a simulation with
-real Bandung weather: `ohm-app/research/brain_sim.ipynb`.
+Ohm **writes his replies with a small neural network** (section 0, brain v4). Next to it he **counts which word
+follows which** in what visitors type, and **which words people use in which situation** (rain, night, charging…).
+Those counts are how visitors teach him (lessons) and how his skills are measured. Before brain v4 they were also how
+he talked: he repeatedly picked a likely next word (sections 1 to 10). Every rule of that chain was tested before it
+was built, in a simulation with real Bandung weather (`ohm-app/research/brain_sim.ipynb`); brain v4's tests are in
+`ohm-app/research/brain_v4.ipynb`.
 
-The code: `src/brain.ts` (learning and talking), `src/grounding.ts` (word + situation links), `src/answers.ts`
+The code: `src/talk.ts` and `src/gen.ts` (brain v4: writing replies), `cpp/kern.cpp` (its kernel), `src/brain.ts` (learning and talking), `src/grounding.ts` (word + situation links), `src/answers.ts`
 (what people answer), `src/mind.ts` (skills and counters), `src/situation.ts` (what's happening now),
 `cpp/pet.cpp` (the weighted random pick).
+
+### 0. Brain v4: replies written word by word
+
+Since brain v4, Ohm writes his replies with a small neural network: a transformer with 4 layers, 4 heads and 256
+dimensions (about 4.1 million weights, `src/model.bin` and `src/model.json`), trained on 47,656 example chats that
+Qwen3-8B (Apache 2.0) wrote for him from a facts sheet about who he is. The research, every test and the owner's
+choices are in `ohm-app/research/brain_v4.ipynb`.
+
+- **What he reads** (`context()` in `src/talk.ts`): his state as 4 words (battery, mood, weather and part of the day,
+  `stateTokens` in `src/situation.ts`), his last line to you, then your message (at most 20 words).
+- **How he writes** (`reply()` in `src/gen.ts`): 8 replies at once, one word at a time. For each word, softmax over the
+  words he may say (those of the training replies, minus blocked and hidden words), keep the likeliest until they reach
+  95%, and roll. A reply that equals a training reply of 5 or more words is set aside, unless all 8 do (then he says the
+  best of them). A reply's score is the average of log2 of its words' chances, stopping included. He says the best one
+  if it reaches the guard (−4.364, a score 9 in 10 real teacher replies reach), else he says he doesn't know yet.
+- **Speed and memory:** the matrix-vector products run in WebAssembly SIMD (`cpp/kern.cpp`, built into `src/kern.wasm`
+  by `npm run build:wasm`). On a laptop a reply takes about 100 ms at the median and 150 ms at p95, waking takes about
+  230 ms, and about 58 MB stay in use.
+- **Learning from visitors (lessons):** once 3 different people (by IP) said the same thing after a word, his chances
+  mix in what they said: p = (1 − λ) × p_network + λ × p_lesson, with λ = m / (m + 3) and m the number of people, at
+  most 5. Lessons read his last two words first, then his last word (`taughtAfter` in `src/brain.ts`). New words a
+  lesson brings get their own slots, so he can say words his network never saw.
+- **Safety:** the crisis reply (line group 88, with the helpline) is fixed and matched before the network runs, and a
+  test keeps it equal to the group. Blocked words are masked in every candidate, not just the one he says.
+- **Think page:** `why.written` carries every candidate with its score and his state, and for the one he said each
+  word's chance, the top 5 it was picked from, the share a lesson gave it, where his die landed (`die`, on the chances
+  laid end to end, and `cut`, where the top 95% stops), and his attention on your words while picking it (averaged over
+  layers and heads). **Your words (`read`) and his attention on them (`attn`) go only to you;** everyone else gets the
+  line without them (`forOthers` in `src/brain.ts`), so nobody else sees what you typed.
+
+The chain in sections 1 to 10 still learns from every message: it feeds lessons, skills, situations and answers. It
+only talks when the model isn't loaded.
 
 ### 1. From message to words
 
@@ -228,6 +264,9 @@ and 6 more writes per message.
 
 ### 7. Talking: `reply()`
 
+Since brain v4 the reply comes from section 0 when the model is loaded; the steps below are how the chain talked
+before, and still would without the model. A whole answer people gave (step 2) still comes first.
+
 1. **Pick a start word (the seed).** If your message has a cue with a link, the **answer** (section 6). If not,
    and you didn't ask anything, 25% of the time a question word, to **ask back**. Otherwise usually the
    **topic**: the known word from your message with the lowest `uses` ("kopi", not "aku"). 30% of the time, or
@@ -302,7 +341,8 @@ line, and the piece it lands in wins.
 
 ### 10. Moderation hooks
 
-- **Approve** (admin): a word from the queue joins the vocabulary. It gets no triples until someone uses it again.
+- **Approve** (admin): a word from the queue joins the vocabulary. Since brain v4 every word that isn't blocked is learned
+  at once, made-up words too, so the queue stays empty.
 - **Block** (admin): the word is removed from `words`, `pending`, every triple, its situation counts and link, its answer counts and links, and every kept answer that contains it, so Ohm can never say it again.
 - **Report** (visitor): flags one of Ohm's lines for the admin page. The admin can remove it from everyone's screen (`unsay`).
 - **Forget** (admin, `POST /admin/forget` with `{"text": …}`): Ohm forgets one kept answer under every cue. The admin page lists the newest 50. It can come back if people give it again.
@@ -317,7 +357,10 @@ write to SQLite.
   feelings and small talk. `tools/build_lines.ts` packs them into `src/lines.bin`. A line answers when the closest stored
   message (BM25, `retrieve.ts`) covers at least half of what you said, you said more than half of it, and it's about the
   same person (`kamu` or `aku`). Filler like `ih` or `sih`, a few spellings and the name after `nama aku` are ignored when
-  matching. When no line fits, he says he doesn't know yet and asks to be taught.
+  matching. When no line fits, he says he doesn't know yet and asks to be taught. Since brain v4 these lines aren't
+  loaded: the network writes his replies, and only the crisis reply (group 88) is kept, in `src/talk.ts`.
+- **The reply network,** `src/model.bin` (its weights) and `src/model.json` (its shape, vocabulary and the training
+  replies he mustn't copy whole), with `src/kern.wasm`: section 0.
 - **Word counts from Tatoeba,** `src/base.bin`, from 28,405 Indonesian sentences (`tools/build_counts.ts`). They mix with
   visitors' counts whenever the chain talks (`base.ts`), and blocking a word hides it there too. They count toward the
   `guessing` skill but not toward his vocabulary, which is still only what visitors taught.
@@ -329,9 +372,15 @@ simulated visitors. The word counts are credited in [CREDITS.md](CREDITS.md).
 
 ### Known limitations
 
+- **He often lands on a line his teacher wrote.** He writes every reply word by word, but about 4 in 10 of his
+  replies equal a whole training reply, mostly short ones like "halo juga". Copies of 5 or more words are set aside
+  unless all 8 candidates are copies (about 5% of replies).
+- **A long message of new words is costly.** Learning 20 new words writes about 210 SQLite rows (a typical message
+  writes 15 to 70). That predates brain v4, and the owner accepted it (2026-11-15): the free plan's 100,000 rows written
+  a day allow about 430 such messages.
 - **Ohm can repeat what one person typed.** He learns like a toddler (section 4), so a sentence one visitor typed
   can come back, word for word, to everyone. The chat says so, and moderation (block, report, ban) is the safety
-  net. Only words from the word lists or approved by the admin are ever learned, and never numbers.
+  net. Every word that isn't blocked is learned (made-up words too, since brain v4), but never numbers.
 - **One IP, one visitor for sentences.** People behind the same IP (one Wi-Fi, some mobile networks) count as one
   visitor for sentences: together they get a quarter vote, like one person. They can each teach situations (each
   browser counts).
