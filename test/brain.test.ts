@@ -59,10 +59,12 @@ describe("hear", () => {
     expect(say("aku kopi").blocked).toBe(true);
   });
 
-  it("unknown words wait for approval and split the sentence", () => {
-    say("aku xyzzy kopi");
-    expect(sql.exec("SELECT word, seen FROM pending").toArray()).toEqual([{ word: "xyzzy", seen: 1 }]);
-    expect(count(sql, "SELECT COUNT(*) AS n FROM grams WHERE p1 = 'aku' AND next = 'kopi'")).toBe(0);
+  it("learns a word outside his word lists like any other, with no approval queue", () => {
+    expect(say("aku xyzzy kopi").learned).toEqual(["aku", "xyzzy", "kopi"]);
+    expect(count(sql, "SELECT COUNT(*) AS n FROM pending")).toBe(0);
+    expect(sql.exec("SELECT langs FROM words WHERE word = 'xyzzy'").one()).toEqual({ langs: "" });
+    expect(count(sql, "SELECT COUNT(*) AS n FROM grams WHERE p2 = 'aku' AND p1 = 'xyzzy' AND next = 'kopi'")).toBe(1);
+    expect(say("aku badword kopi").learned).toEqual([]); // a blocked word still rejects the whole message
   });
 
   it("counts a pattern again only when a different visitor types it (the visitor rule)", () => {
@@ -271,11 +273,11 @@ describe("answers", () => {
     expect(why.quote).toEqual({ words: ["baik"], times: 8 });
   });
 
-  it("keeps only answers he could say, and starts from the answer word when none fits", () => {
+  it("keeps answers with words outside his lists, and starts from the answer word when none is kept", () => {
     chats();
+    answer("kabar", "baik xyzzy"); // xyzzy isn't in his word lists, but he learns it, so he can say the answer
+    expect(count(sql, "SELECT COUNT(*) AS n FROM answers WHERE text = 'baik xyzzy'")).toBe(1);
     sql.exec("DELETE FROM answers");
-    answer("kabar", "baik xyzzy"); // xyzzy waits for approval: the answer isn't kept
-    expect(count(sql, "SELECT COUNT(*) AS n FROM answers")).toBe(0);
     const { text, why } = reply(sql, ["kabar"], DRY, () => 0)!;
     expect(text.split(" ")[0]).toBe("baik");
     expect(why.quote).toBeUndefined();

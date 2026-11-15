@@ -17,6 +17,20 @@ export function partOfDay(now: number): Situation {
   return h >= 5 && h < 11 ? "pagi" : h >= 11 && h < 15 ? "siang" : h >= 15 && h < 18 ? "sore" : "malam";
 }
 
+/**
+ * Brain v4's state tokens (talk.ts): battery, mood, weather and part of day, in the teacher's words. Low uses the
+ * thresholds above; full is 80+ for both. ponytail: no cloud reading, so "berawan" never comes up; cold is under 20 °C.
+ */
+export function stateTokens(weather: Weather, pet: Pet, now: number): string[] {
+  const charge = valueNow(pet.charge, now), mood = valueNow(pet.mood, now);
+  return [
+    charge < BATTERY_LOW ? "tipis" : charge >= 80 ? "penuh" : "setengah",
+    mood < MOOD_LOW ? "sedih" : mood >= 80 ? "senang" : "biasa",
+    weather.raining ? "hujan" : weather.tempC > HOT_C ? "panas" : weather.tempC < 20 ? "dingin" : "cerah",
+    partOfDay(now),
+  ];
+}
+
 /** Everything that's on right now. `lastCare` is what this visitor last did to Ohm, and when. */
 export function situation(weather: Weather, pet: Pet, now: number, lastCare?: { t: Care; at: number }): Situation[] {
   const on: Situation[] = [partOfDay(now)];

@@ -1,11 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 import baseFile from "./base.bin";
-import linesFile from "./lines.bin";
+import kernFile from "./kern.wasm";
+import modelFile from "./model.bin";
+import modelMeta from "./model.json";
 import { loadBase, useBase } from "./base";
-import { ADMIT, admitting, linesFirst, openRetriever, useRetriever } from "./retrieve";
 import { parseAdminCommand } from "./admin";
 import { ANSWER_MS } from "./answers";
-import { brainStats, hear, inStyle, reply } from "./brain";
+import { brainStats, forOthers, hear, inStyle, reply } from "./brain";
 import { cooldown, hashIp, parseClientMessage } from "./guard";
 import { feed, lines, logEvent, markRated, saveLine } from "./history";
 import { kvGet, kvSet } from "./kv";
@@ -42,7 +43,8 @@ import {
   type Why,
 } from "./protocol";
 import { migrate } from "./schema";
-import { situation, type Care } from "./situation";
+import { situation, stateTokens, type Care } from "./situation";
+import { loadModel, useModel } from "./talk";
 import { away, reached, snapshot, standing, vitals } from "./vitals";
 import { DEFAULT_WEATHER, fetchBandungWeather, parseWeather } from "./weather";
 import { hasBlocked, tokenize } from "./words";
@@ -64,10 +66,10 @@ type Visitor = {
   toYou?: { words: string[]; at: number };
 };
 
-// What he knows before anyone talks: Tatoeba's word counts (base.ts), and his own lines, with admitting he doesn't know
-// when none fits (retrieve.ts). Both are read-only files, loaded once per wake. Visitors only ever write to SQLite.
+// What he knows before anyone talks: Tatoeba's word counts (base.ts), and G, the model that writes his replies word by
+// word (talk.ts, gen.ts, kern.wasm). Both are read-only files, loaded once per wake. Visitors only ever write to SQLite.
 useBase(loadBase(baseFile));
-useRetriever(linesFirst(openRetriever(linesFile, { minWords: 1 }), admitting(ADMIT)));
+useModel(loadModel(modelFile, modelMeta as unknown as Parameters<typeof loadModel>[1], lexicon, kernFile)); // JSON types tensors loosely
 
 // The one and only Ohm. Every visitor connects to this single object, and it handles
 // one message at a time, so there is never more than one copy of Ohm's state.
@@ -168,6 +170,7 @@ export class Ohm extends DurableObject<Env> {
     // Answer first, learn second. The other way round, a sentence full of new words comes
     // straight back out of Ohm, word for word, to everyone online.
     const on = situation(this.weather(), pet, now, me.lastCare); // rain, night, hungry, just charged…
+    const answering = me.toYou && now - me.toYou.at <= ANSWER_MS ? me.toYou.words : []; // Ohm's last line to you
     let answer: string;
     let why: Why | undefined; // how Ohm built it, for the site's "think" button: sent live, never stored
     let said: string[] | undefined; // his words to you, in stored spellings
@@ -176,7 +179,7 @@ export class Ohm extends DurableObject<Env> {
     } else {
       act(pet, "chat", now, this.conditions());
       this.save(pet);
-      const raw = reply(this.sql, words, on);
+      const raw = reply(this.sql, words, on, undefined, { state: stateTokens(this.weather(), pet, now), prev: answering });
       const styled = raw && inStyle(this.sql, lexicon, raw); // in the spellings people use with him
       answer = styled?.text ?? "beep?";
       why = styled?.why;
@@ -184,7 +187,6 @@ export class Ohm extends DurableObject<Env> {
       if (!this.weather().isDay) answer = `zzz… ${answer}`; // it talks in its sleep
     }
 
-    const answering = me.toYou && now - me.toYou.at <= ANSWER_MS ? me.toYou.words : []; // Ohm's last line to you
     const heard = hear(this.sql, lexicon, typed, me, now, on, answering);
     ws.serializeAttachment({ ...me, toYou: said && { words: said, at: now } } satisfies Visitor);
     if (heard.learned.length > 0) {
@@ -192,7 +194,10 @@ export class Ohm extends DurableObject<Env> {
       this.broadcast({ t: "event", e: logEvent(this.sql, now, "taught", me.id, me.name, heard.learned.join(", ")) });
       this.unlock(pet, now);
     }
-    this.broadcast({ t: "line", line: saveLine(this.sql, now, answer, me.name, me.ipHash), why });
+    // The visitor he answered sees where he looked in their message; everyone else gets the line without their words.
+    const line = saveLine(this.sql, now, answer, me.name, me.ipHash);
+    this.send(ws, { t: "line", line, why });
+    this.broadcast({ t: "line", line, why: why && forOthers(why) }, ws);
     this.broadcast(this.stateMsg(pet, now));
   }
 
@@ -385,9 +390,10 @@ export class Ohm extends DurableObject<Env> {
     ws.send(JSON.stringify(msg));
   }
 
-  private broadcast(msg: ServerMsg) {
+  private broadcast(msg: ServerMsg, except?: WebSocket) {
     const text = JSON.stringify(msg);
     for (const ws of this.ctx.getWebSockets()) {
+      if (ws === except) continue;
       try {
         ws.send(text);
       } catch {

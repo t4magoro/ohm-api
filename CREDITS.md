@@ -12,3 +12,9 @@ aandrusiak, aauliahakim, ABChessel, abiniz, aboubasha, Adelpa, Adou_Fr, agro1986
 ## Word lists
 
 `wordlists/id.txt` and `wordlists/en.txt` come from [FrequencyWords](https://github.com/hermitdave/FrequencyWords) by Hermit Dave. Its code is MIT, but its word lists are CC BY-SA 4.0, so the comment in `tools/build_wordlists.py` that says MIT needs fixing. The blocklist uses [LDNOOBW](https://github.com/LDNOOBW/List-of-Dirty-Naughty-Obscene-and-Otherwise-Bad-Words), CC BY 4.0.
+
+## Reply model
+
+The weights in `src/model.bin` (and the vocabulary and training replies in `src/model.json`) come from a network trained
+on example chats written by [Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B) (revision `b968826`), which is licensed under
+Apache 2.0. Apache 2.0 puts no terms on a model's outputs; Qwen3's own training data is not public.

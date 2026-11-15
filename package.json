@@ -5,7 +5,7 @@
   "scripts": {
     "test": "npm run build:wasm && vitest run",
     "dev": "wrangler dev --ip 0.0.0.0 --port 8787",
-    "build:wasm": "clang++ --target=wasm32 -std=c++20 -O2 -nostdlib -fno-exceptions -fno-rtti -Wl,--no-entry -o src/pet.wasm cpp/pet.cpp",
+    "build:wasm": "clang++ --target=wasm32 -std=c++20 -O2 -nostdlib -fno-exceptions -fno-rtti -Wl,--no-entry -o src/pet.wasm cpp/pet.cpp && clang++ --target=wasm32 -std=c++20 -O2 -msimd128 -nostdlib -fno-exceptions -fno-rtti -Wl,--no-entry -Wl,--import-memory -Wl,--export=linear -o src/kern.wasm cpp/kern.cpp",
     "test:cpp": "g++ -std=c++20 -g -Wall -fsanitize=address,undefined cpp/pet_test.cpp -o /tmp/pet_test && setarch $(uname -m) -R /tmp/pet_test",
     "typecheck": "wrangler types && tsc"
   },
