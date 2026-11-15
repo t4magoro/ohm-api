@@ -69,6 +69,9 @@ choices are in `ohm-app/research/brain_v4.ipynb`.
   mix in what they said: p = (1 − λ) × p_network + λ × p_lesson, with λ = m / (m + 3) and m the number of people, at
   most 5. Lessons read his last two words first, then his last word (`taughtAfter` in `src/brain.ts`). New words a
   lesson brings get their own slots, so he can say words his network never saw.
+  **Off since 2026-11-16 (`SETTINGS.lessons` in `src/talk.ts`):** on the live database, months of the old chain's counts
+  made lessons fire on common words ("halo": 12 people) and put the chain's next words at 63% on every step, so replies
+  drifted into nonsense. Visitors still teach words, situations and answers; lessons come back redesigned.
 - **Safety:** the crisis reply (line group 88, with the helpline) is fixed and matched before the network runs, and a
   test keeps it equal to the group. Blocked words are masked in every candidate, not just the one he says.
 - **Think page:** `why.written` carries every candidate with its score and his state, and for the one he said each

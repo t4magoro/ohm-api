@@ -426,7 +426,7 @@ export function reply(sql: SqlStorage, heard: string[], on: Situation[], random:
   if (model && talk) {
     const safe = model.crisis.own!(heard, random);
     if (safe?.own) return { text: safe.words.join(" "), words: safe.words, why: { on, seed: { word: safe.words[0], from: "retrieved" }, steps: [], quote: { words: safe.words, times: 1 }, retrieved: safe } satisfies Why };
-    const lesson = taught(sql, tidy(heard), LESSON);
+    const lesson = SETTINGS.lessons ? taught(sql, tidy(heard), LESSON) : undefined; // off for now: talk.ts, SETTINGS
     const r = speak(model, talk, heard, lesson, (p2, p1) => taughtAfter(sql, p2, p1), random);
     const admit = r.words ? undefined : admitting(ADMIT).find(heard, random);
     const words = r.words ?? admit?.words;

@@ -113,6 +113,7 @@ describe("brain v4", () => {
   });
 
   it("says back what 3 visitors taught, through the lesson mix", () => {
+    SETTINGS.lessons = true; // lessons are off in production for now (talk.ts); their mechanics stay tested
     for (const who of [1, 2, 3]) say("kopi enak sekali", who);
     SETTINGS.kappa = 0.1; // κ is tuned later; at 0.1, λ = 3 / 3.1 = 0.97 fills the top-p set (π = 0.95) at every step
     const r = ask("kopi");
@@ -123,6 +124,7 @@ describe("brain v4", () => {
   });
 
   it("says a word G has never seen, outside his word lists, once 3 visitors teach it", () => {
+    SETTINGS.lessons = true; // lessons are off in production for now (talk.ts); their mechanics stay tested
     // A made-up word: in neither word list nor G's vocabulary ("durian" was, until round 2 put it in G's).
     expect(meta.itos).not.toContain("zorbul");
     expect(lexicon.langsOf("zorbul")).toEqual([]);
@@ -134,12 +136,14 @@ describe("brain v4", () => {
   });
 
   it("doesn't learn a lesson from one visitor alone", () => {
+    SETTINGS.lessons = true; // lessons are off in production for now (talk.ts); their mechanics stay tested
     for (let i = 0; i < 3; i++) say("kopi enak sekali", 1);
     SETTINGS.kappa = 0.1;
     expect(ask("kopi").why.lesson).toBeUndefined();
   });
 
   it("weighs a lesson by how many people taught it, up to 5, so two friends taking turns count as 5 at most", () => {
+    SETTINGS.lessons = true; // lessons are off in production for now (talk.ts); their mechanics stay tested
     const weight = (people: number[]) => {
       sql = testSql();
       for (const who of people) say("kopi enak sekali", who);
@@ -148,6 +152,15 @@ describe("brain v4", () => {
     const [three, five, alternate] = [weight([1, 2, 3]), weight([1, 2, 3, 4, 5]), weight(Array.from({ length: 100 }, (_, i) => 1 + (i % 2)))];
     expect([three, five]).toEqual([3 / (3 + SETTINGS.kappa), 5 / (5 + SETTINGS.kappa)]);
     expect(alternate).toBe(five);
+  });
+
+  it("mixes in no lesson while lessons are off, however many people taught it (the 2026-11-16 hotfix)", () => {
+    expect(SETTINGS.lessons).toBe(false);
+    for (const who of [1, 2, 3, 4, 5, 6]) say("kopi enak sekali", who);
+    const r = ask("kopi");
+    expect(r.why.lesson).toBeUndefined();
+    expect(r.why.written!.lambda).toBe(0);
+    expect(r.why.written!.steps.every((s) => s.lesson === 0)).toBe(true);
   });
 });
 
