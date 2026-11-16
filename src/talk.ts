@@ -9,10 +9,11 @@ import { tokenize, type Lexicon } from "./words";
 /** Tuned on the tuning seeds (research/brain_v4.ipynb, change 13): k = 8 (change 8), tau and pi by the fit judge, theta the
  *  10th percentile of held-out teacher replies' scores, kappa the largest that passes the teaching gates (change 12): how
  *  many people's worth of weight G keeps against a lesson (lessonWeight). mu = 0, so there's no fit term (change 14). */
-// lessons: off since 2026-11-16 (hotfix). On the live database, months of the old chain's counts made lessons fire on
-// common words ("halo": 12 people) and put the chain's next words at 63% on every step, so replies drifted into
-// nonsense. The network alone is what the owner rated 4.20. They come back redesigned, measured on a full database.
-export const SETTINGS = { k: 8, tau: 1, pi: 0.95, theta: -4.364, kappa: 3, lessons: false };
+// lessons (change 16): "new", only for a topic his network doesn't know (not in its vocabulary). With "all" (as shipped
+// on 2026-11-16), months of the old chain's counts made lessons fire on common words ("halo": 12 people) and replies
+// drifted into nonsense; on a lived-in test database they fired on 70% of everyday messages and cost 4.7 bits a word
+// under the network. "new" fires on none of them and still teaches new words. "off" was the hotfix.
+export const SETTINGS = { k: 8, tau: 1, pi: 0.95, theta: -4.364, kappa: 3, lessons: "new" as "off" | "new" | "all" };
 export const LESSON = 3; // today's visitor rule: 3 or more people said the same word after the topic
 const MAX_WORDS = 20;
 const STATE_KEYS = ["battery", "mood", "weather", "daypart"] as const;
