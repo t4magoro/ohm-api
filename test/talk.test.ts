@@ -113,7 +113,7 @@ describe("brain v4", () => {
   });
 
   it("says back what 3 visitors taught, through the lesson mix", () => {
-    SETTINGS.lessons = true; // lessons are off in production for now (talk.ts); their mechanics stay tested
+    SETTINGS.lessons = "all"; // "kopi" is in G's vocabulary, so "new" wouldn't mix it in; the mechanics stay tested
     for (const who of [1, 2, 3]) say("kopi enak sekali", who);
     SETTINGS.kappa = 0.1; // κ is tuned later; at 0.1, λ = 3 / 3.1 = 0.97 fills the top-p set (π = 0.95) at every step
     const r = ask("kopi");
@@ -124,7 +124,6 @@ describe("brain v4", () => {
   });
 
   it("says a word G has never seen, outside his word lists, once 3 visitors teach it", () => {
-    SETTINGS.lessons = true; // lessons are off in production for now (talk.ts); their mechanics stay tested
     // A made-up word: in neither word list nor G's vocabulary ("durian" was, until round 2 put it in G's).
     expect(meta.itos).not.toContain("zorbul");
     expect(lexicon.langsOf("zorbul")).toEqual([]);
@@ -136,14 +135,14 @@ describe("brain v4", () => {
   });
 
   it("doesn't learn a lesson from one visitor alone", () => {
-    SETTINGS.lessons = true; // lessons are off in production for now (talk.ts); their mechanics stay tested
+    SETTINGS.lessons = "all"; // the rule is checked on a known word, where only "all" mixes
     for (let i = 0; i < 3; i++) say("kopi enak sekali", 1);
     SETTINGS.kappa = 0.1;
     expect(ask("kopi").why.lesson).toBeUndefined();
   });
 
   it("weighs a lesson by how many people taught it, up to 5, so two friends taking turns count as 5 at most", () => {
-    SETTINGS.lessons = true; // lessons are off in production for now (talk.ts); their mechanics stay tested
+    SETTINGS.lessons = "all"; // "kopi" is in G's vocabulary, so "new" wouldn't mix it in; the mechanics stay tested
     const weight = (people: number[]) => {
       sql = testSql();
       for (const who of people) say("kopi enak sekali", who);
@@ -154,13 +153,19 @@ describe("brain v4", () => {
     expect(alternate).toBe(five);
   });
 
-  it("mixes in no lesson while lessons are off, however many people taught it (the 2026-11-16 hotfix)", () => {
-    expect(SETTINGS.lessons).toBe(false);
-    for (const who of [1, 2, 3, 4, 5, 6]) say("kopi enak sekali", who);
-    const r = ask("kopi");
-    expect(r.why.lesson).toBeUndefined();
-    expect(r.why.written!.lambda).toBe(0);
-    expect(r.why.written!.steps.every((s) => s.lesson === 0)).toBe(true);
+  it("mixes in a lesson only on a word his network doesn't know, however many people taught a known one (change 16)", () => {
+    expect(SETTINGS.lessons).toBe("new");
+    for (const who of [1, 2, 3, 4, 5, 6]) {
+      say("kopi enak sekali", who);
+      say("zorbul enak sekali", who);
+    }
+    const known = ask("kopi");
+    expect(known.why.lesson).toBeUndefined();
+    expect(known.why.written!.lambda).toBe(0);
+    expect(known.why.written!.steps.every((s) => s.lesson === 0)).toBe(true);
+    expect(ask("zorbul").why.lesson).toMatchObject({ word: "zorbul", count: 6 });
+    SETTINGS.lessons = "off"; // the hotfix's setting still works
+    expect(ask("zorbul").why.lesson).toBeUndefined();
   });
 });
 

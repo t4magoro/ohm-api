@@ -69,9 +69,13 @@ choices are in `ohm-app/research/brain_v4.ipynb`.
   mix in what they said: p = (1 − λ) × p_network + λ × p_lesson, with λ = m / (m + 3) and m the number of people, at
   most 5. Lessons read his last two words first, then his last word (`taughtAfter` in `src/brain.ts`). New words a
   lesson brings get their own slots, so he can say words his network never saw.
-  **Off since 2026-11-16 (`SETTINGS.lessons` in `src/talk.ts`):** on the live database, months of the old chain's counts
-  made lessons fire on common words ("halo": 12 people) and put the chain's next words at 63% on every step, so replies
-  drifted into nonsense. Visitors still teach words, situations and answers; lessons come back redesigned.
+  **Only for words his network doesn't know (`SETTINGS.lessons = "new"` in `src/talk.ts`, change 16):** as first
+  shipped, lessons fired on any word, and months of the old chain's counts made them fire on common words ("halo": 12
+  people, 63% of every step), so replies drifted into nonsense; they were switched off on 2026-11-16. On a lived-in
+  test database (6,000 messages from 600 people), lessons on every word fired on 70% of everyday messages and cut how
+  likely the network finds his words by 4.7 bits a word. Lessons only for unknown words fired on none of them, over 10
+  test models, and still taught 3 people's new phrase 63% of the time (5 people: 89%; one person: never). The cost:
+  visitors can't change what he says after a word he already knows (`research/brain_v4.ipynb`, change 16).
 - **Safety:** the crisis reply (line group 88, with the helpline) is fixed and matched before the network runs, and a
   test keeps it equal to the group. Blocked words are masked in every candidate, not just the one he says.
 - **Think page:** `why.written` carries every candidate with its score and his state, and for the one he said each
